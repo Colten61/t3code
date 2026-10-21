@@ -809,9 +809,8 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
 });
 
 /**
- * Stop for the thread's latest work: interrupts the active run, or the settled run whose
- * background work still runs. With no run to stop, it ends the thread's pull request
- * watches, the only background work that has no run.
+ * Stop reaches work outside the client's bounded history window. The server
+ * selects the current run and background work unless a run is explicitly targeted.
  */
 export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThreadTurn")(function* (
   input: InterruptThreadTurnInput,
@@ -830,6 +829,16 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
   }
   let runId = input.runId ?? (input.turnId as RunId | undefined);
   if (runId === undefined) {
+    const config = yield* getInitialServerConfig();
+    if (config.environment.capabilities.serverResolvedThreadStop === true) {
+      return yield* dispatch({
+        type: "run.interrupt",
+        commandId: yield* allocateCommandId(input),
+        threadId: input.threadId,
+        holdQueue: true,
+      });
+    }
+    // Older servers require a concrete run and cannot resolve Stop themselves.
     const projection = yield* getProjection(input.threadId);
     runId = projection.runs.findLast(
       (run) =>
@@ -869,7 +878,6 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
       return result;
     }
   }
-  if (runId === undefined) return { sequence: 0 };
   return yield* dispatch({
     type: "run.interrupt",
     commandId: yield* allocateCommandId(input),

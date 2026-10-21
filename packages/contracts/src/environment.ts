@@ -187,6 +187,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       identified rollback readiness. Clients retain projection-based command
       shaping and validation when this is absent. */
   serverResolvedCommandContext: Schema.optionalKey(Schema.Boolean),
+  /** Server accepts run.interrupt without a runId and resolves all pending thread work. */
+  serverResolvedThreadStop: Schema.optionalKey(Schema.Boolean),
   threadPullRequests: Schema.optionalKey(Schema.Boolean),
   todoBoard: Schema.optionalKey(Schema.Boolean),
   /** FORK: the server runs the night mode (night.start and friends). */

@@ -49,6 +49,41 @@ const layerTest = Layer.mergeAll(
   ),
 );
 
+it.effect("accepts Stop with no current work and commits its child-stop effect once", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const sql = yield* SqlClient.SqlClient;
+    const threadId = ThreadId.make("thread:idle-stop");
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-idle-stop"),
+      threadId,
+      projectId: ProjectId.make("project:idle-stop"),
+      title: "Idle Stop",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const command = {
+      type: "run.interrupt",
+      commandId: CommandId.make("stop-idle-thread"),
+      threadId,
+      holdQueue: true,
+    } as const;
+    const result = yield* orchestrator.dispatch(command);
+    assert.deepEqual(yield* orchestrator.dispatch(command), result);
+    const effects = yield* sql<{ count: number }>`
+      SELECT COUNT(*) AS count FROM orchestration_v2_effect_outbox
+      WHERE thread_id = ${threadId} AND effect_type = 'delegated-tasks.stop'
+    `;
+    assert.equal(effects[0]?.count, 1);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect(
   "dispatches metadata, queue resume and request controls without hydrating unrelated history",
   () =>
@@ -337,7 +372,7 @@ it.effect("implements a proposed plan that the command projection leaves out", (
 // Stop's settle follow-up runs after the provider interrupt returns, possibly
 // long after the Stop (retries) or again (an effect replayed after a crash).
 // A later run's background work is not that Stop's to end.
-it.effect("settles only the stopped run's background work, once", () =>
+it.effect.each(["settle", "stop"] as const)("settles completed commands (%s)", (operation) =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -387,6 +422,30 @@ it.effect("settles only the stopped run's background work, once", () =>
       const attemptId = RunAttemptId.make(`attempt:settle-binding:${ordinal}`);
       const nodeId = NodeId.make(`node:settle-binding:${ordinal}`);
       const providerTurnId = ProviderTurnId.make(`provider-turn:settle-binding:${ordinal}`);
+      yield* projections.apply({
+        id: EventId.make(`settle-binding:node:${ordinal}`),
+        type: "node.updated",
+        threadId,
+        runId,
+        occurredAt: now,
+        payload: {
+          id: nodeId,
+          threadId,
+          runId,
+          parentNodeId: null,
+          rootNodeId: nodeId,
+          kind: "root_turn",
+          status: "completed",
+          countsForRun: true,
+          providerThreadId,
+          providerTurnId,
+          nativeItemRef: null,
+          runtimeRequestId: null,
+          checkpointScopeId: null,
+          startedAt: now,
+          completedAt: now,
+        },
+      });
       yield* projections.apply({
         id: EventId.make(`settle-binding:run:${ordinal}`),
         type: "run.created",
@@ -477,6 +536,24 @@ it.effect("settles only the stopped run's background work, once", () =>
         .flatMap((item) => (item.type === "command_execution" ? [`${item.id}:${item.status}`] : []))
         .toSorted(),
     );
+    if (operation === "stop") {
+      yield* orchestrator.dispatch({
+        type: "run.interrupt",
+        commandId: CommandId.make("stop-thread-with-older-commands"),
+        threadId,
+        holdQueue: true,
+      });
+      assert.deepEqual(yield* itemStatuses, [
+        `${commandItem(1)}:interrupted`,
+        `${commandItem(2)}:interrupted`,
+      ]);
+      assert.deepEqual(
+        (yield* projections.getThreadProjection(threadId)).runs.map((run) => run.status),
+        ["completed", "completed"],
+      );
+      assert.deepEqual((yield* projections.getThreadShell(threadId))?.pendingBackgroundTasks, []);
+      return;
+    }
     // The settle that followed a Stop of run 1's turn, dispatched only after
     // run 2 had settled with work of its own.
     const settle = {

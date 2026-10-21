@@ -548,12 +548,10 @@ const layerBase: Layer.Layer<
             commandId: input.commandId,
             events: normalized,
           });
-          const sequence = storedEvents.at(-1)?.sequence;
-          if (sequence === undefined) {
-            return yield* Effect.die(
-              new Error(`Command ${input.commandId} produced no orchestration events.`),
-            );
-          }
+          // Stop can have only child-stop effects when its own thread is already idle.
+          const sequence =
+            storedEvents.at(-1)?.sequence ??
+            (yield* eventStore.latestSequence({ threadId: input.threadId }));
           yield* applyStoredEvents(storedEvents);
           yield* effectOutbox.enqueue(input.effects);
           const receipt: CommandReceiptStore.CommandReceiptV2 = {

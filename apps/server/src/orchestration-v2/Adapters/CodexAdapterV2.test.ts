@@ -4641,7 +4641,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       );
     },
   );
-  it.effect("interrupts a completed run's background command through orchestration", () => {
+  it.effect("resolves Stop on the server for a completed run's background command", () => {
     const transcript = makeBackgroundStopTranscript(true);
     return Effect.scoped(
       Effect.gen(function* () {
@@ -4742,7 +4742,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             type: "run.interrupt",
             commandId: CommandId.make("stop-background-command"),
             threadId,
-            runId: run.id,
+            holdQueue: true,
           });
           yield* worker.drain();
           yield* Fiber.join(stopped);

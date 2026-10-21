@@ -9373,7 +9373,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
 
   const dispatchRunInterrupt = (
-    command: Extract<OrchestrationV2Command, { readonly type: "run.interrupt" }>,
+    command: Extract<OrchestrationV2Command, { readonly type: "run.interrupt" }> & {
+      readonly runId: RunId;
+    },
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) =>
@@ -11087,9 +11089,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* dispatchSubagentStop(command, events, effects);
         break;
       case "run.interrupt":
-        cancelUnsettledEffects = yield* dispatchRunInterrupt(command, events, effects);
+        cancelUnsettledEffects =
+          command.runId === undefined
+            ? yield* dispatchThreadStop({ ...command, type: "thread.stop" }, events, effects)
+            : yield* dispatchRunInterrupt({ ...command, runId: command.runId }, events, effects);
         // Stop also stops every delegated task under the thread once it commits.
-        if (command.holdQueue === true) {
+        if (command.runId === undefined || command.holdQueue === true) {
           yield* Ref.update(effects, (existing) => [
             ...existing,
             {
@@ -11300,6 +11305,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         planned.events.length > 0 ||
         command.type === "thread.background-work.settle" ||
         command.type === "thread.stop" ||
+        (command.type === "run.interrupt" && command.runId === undefined) ||
         command.type === "subagent.stop"
           ? Effect.succeed(planned)
           : Effect.fail(
@@ -11350,7 +11356,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
-    if (plan.events.length === 0) {
+    if (
+      plan.events.length === 0 &&
+      plan.effects.length === 0 &&
+      plan.cancelUnsettledEffects === undefined
+    ) {
       // A settle that ended nothing still records its receipt: a replayed Stop
       // effect then finds it instead of settling work that appeared since.
       const resultSequence = yield* Effect.gen(function* () {

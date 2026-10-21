@@ -3096,7 +3096,8 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("run.interrupt"),
     commandId: CommandId,
     threadId: ThreadId,
-    runId: RunId,
+    /** Omit to stop the thread's current work, resolved from authoritative server state. */
+    runId: Schema.optional(RunId),
     reason: Schema.optional(Schema.String),
     /**
      * Set by the Stop button. Stop also holds the queue, ends the thread's pull request

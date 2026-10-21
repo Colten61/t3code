@@ -137,6 +137,18 @@ const decodeOrchestrationV2SubscribeThreadInput = Schema.decodeUnknownSync(
 );
 
 describe("orchestration V2 contracts", () => {
+  it("accepts both server-resolved Stop and explicit run interrupts", () => {
+    const stop = {
+      type: "run.interrupt",
+      commandId: "command:stop",
+      threadId: "thread:stop",
+      holdQueue: true,
+    };
+    const decode = Schema.decodeUnknownSync(OrchestrationV2Command);
+    expect(decode(stop)).toEqual(stop);
+    expect(decode({ ...stop, runId: "run:stop" })).toEqual({ ...stop, runId: "run:stop" });
+  });
+
   it("carries command failure metadata through runtime and JSON schemas without output text", () => {
     const base = {
       id: "command-item",

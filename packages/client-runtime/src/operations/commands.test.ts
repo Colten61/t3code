@@ -79,6 +79,7 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly projection?: OrchestrationV2ThreadProjection;
   readonly projectionRequests?: ThreadId[];
   readonly advertiseServerResolvedCommandContext?: boolean;
+  readonly advertiseServerResolvedThreadStop?: boolean;
 }) {
   const client = {
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
@@ -129,6 +130,9 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
           ...(input.advertiseServerResolvedCommandContext === false
             ? {}
             : { serverResolvedCommandContext: true }),
+          ...(input.advertiseServerResolvedThreadStop === false
+            ? {}
+            : { serverResolvedThreadStop: true }),
         },
       },
     } as never),
@@ -537,7 +541,12 @@ describe("V2 environment commands", () => {
         },
       };
       const commands: OrchestrationV2Command[] = [];
-      const supervisor = yield* makeSupervisor({ commands, projects: [], projection });
+      const supervisor = yield* makeSupervisor({
+        commands,
+        projects: [],
+        projection,
+        advertiseServerResolvedThreadStop: false,
+      });
 
       yield* interruptThreadTurn({ threadId: v2ThreadId }).pipe(
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
@@ -610,7 +619,12 @@ describe("V2 environment commands", () => {
         ],
       };
       const commands: OrchestrationV2Command[] = [];
-      const supervisor = yield* makeSupervisor({ commands, projects: [], projection });
+      const supervisor = yield* makeSupervisor({
+        commands,
+        projects: [],
+        projection,
+        advertiseServerResolvedThreadStop: false,
+      });
 
       const result = yield* interruptThreadTurn({ threadId: v2ThreadId }).pipe(
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
@@ -1048,6 +1062,35 @@ describe("V2 environment commands", () => {
           },
         ]);
       }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("sends Stop even when the bounded history contains no pending work", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const projectionRequests: ThreadId[] = [];
+      const supervisor = yield* makeSupervisor({
+        commands,
+        projects: [],
+        projectionRequests,
+        projection: { ...v2Projection, turnItems: [] },
+      });
+
+      const result = yield* interruptThreadTurn({
+        commandId: CommandId.make("stop-outside-history"),
+        threadId: v2ThreadId,
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(result).toEqual({ sequence: 1 });
+      expect(projectionRequests).toEqual([]);
+      expect(commands).toEqual([
+        {
+          type: "run.interrupt",
+          commandId: "stop-outside-history",
+          threadId: v2ThreadId,
+          holdQueue: true,
+        },
+      ]);
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("interrupts a known run without fetching the full projection", () =>

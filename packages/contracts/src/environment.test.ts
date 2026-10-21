@@ -96,4 +96,14 @@ describe("ExecutionEnvironmentDescriptor", () => {
       }).capabilities.serverResolvedCommandContext,
     ).toBe(true);
   });
+
+  it("enables server-resolved Stop only when advertised", () => {
+    expect(decodeDescriptor(descriptor).capabilities.serverResolvedThreadStop).toBeUndefined();
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, serverResolvedThreadStop: true },
+      }).capabilities.serverResolvedThreadStop,
+    ).toBe(true);
+  });
 });
