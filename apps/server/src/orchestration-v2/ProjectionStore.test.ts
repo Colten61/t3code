@@ -689,8 +689,15 @@ it.effect.each([
           );
         }
       });
+      // FORK: a live subagent task carries its item's start for the background-work drawer.
       const owned = [
-        { taskId: nativeTaskId, description: item.title, kind: "subagent", providerInstanceId },
+        {
+          taskId: nativeTaskId,
+          description: item.title,
+          kind: "subagent",
+          providerInstanceId,
+          ...(item.startedAt == null ? {} : { startedAt: DateTime.formatIso(item.startedAt) }),
+        },
       ];
       yield* assertOwners(threadId, owned);
       yield* assertOwners(otherThreadId, owned);

@@ -12,6 +12,7 @@ const { Children, mocks } = vi.hoisted(() => ({
     branchNaming: { onChange: (_patch: ServerSettingsPatch) => {} },
     updateSettings: vi.fn(),
     alert: vi.fn(),
+    providersAtom: {},
     targets: [] as ReturnType<typeof environment>[],
     projectSelected: false,
   },
@@ -37,7 +38,8 @@ vi.mock("react-native", () => ({
   ),
 }));
 vi.mock("@effect/atom-react", () => ({
-  useAtomValue: () => AsyncResult.success({}),
+  useAtomValue: (atom: unknown) =>
+    atom === mocks.providersAtom ? new Map() : AsyncResult.success({}),
   useAtomSet: () => () => {},
 }));
 vi.mock("../../state/preferences", () => ({
@@ -52,6 +54,10 @@ vi.mock("../../state/session", () => ({
   useEnvironmentsWithScope: () => new Set(mocks.targets.map((target) => target.environmentId)),
 }));
 vi.mock("../../state/server", () => ({ serverEnvironment: { updateSettings: {} } }));
+// FORK: composer assist reads each environment's providers from the presentation atoms.
+vi.mock("../../state/presentation", () => ({
+  environmentPresentations: { providersByEnvironmentAtom: mocks.providersAtom },
+}));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: () => mocks.updateSettings,
 }));

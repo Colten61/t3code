@@ -33,6 +33,10 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
+import * as AgentQueue from "./agentQueue/AgentQueueService.ts";
+import * as ComposerAssist from "./composerAssist/ComposerAssistService.ts";
+import * as Night from "./night/NightService.ts";
+import * as TodoBoard from "./project/TodoBoard.ts";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
@@ -685,6 +689,11 @@ it.effect(
           Layer.fresh(layerConfigSources),
           Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
           Layer.mock(ServerBrowser.ServerBrowser)({}),
+          // FORK: services the fork's RPC handlers take when the layer is built.
+          Layer.mock(TodoBoard.TodoBoard)({}),
+          Layer.mock(Night.NightService)({}),
+          Layer.mock(AgentQueue.AgentQueueService)({}),
+          Layer.mock(ComposerAssist.ComposerAssistService)({}),
         ),
       ),
       Effect.scoped,

@@ -2766,6 +2766,7 @@ describe("OrchestratorMcpService provider instance hard cap", () => {
     messages: [],
     subagents: [],
     providerThreads: [],
+    runtimeRequests: [],
     turnItems: [],
   } as unknown as OrchestrationV2ThreadProjection;
 

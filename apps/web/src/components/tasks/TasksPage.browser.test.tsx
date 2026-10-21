@@ -51,7 +51,10 @@ vi.mock("~/state/entities", () => ({
   useServerConfigs: () =>
     new Map([[project.environmentId, { environment: { capabilities: { todoBoard: true } } }]]),
 }));
-vi.mock("~/state/environments", () => ({ useEnvironmentHttpBaseUrl: () => null }));
+vi.mock(import("~/state/environments"), async (original) => ({
+  ...(await original()),
+  useEnvironmentHttpBaseUrl: () => null,
+}));
 vi.mock("~/state/projects", () => ({
   projectTodoBoard: () => ({ kind: "board" }),
   projectEnvironment: { readFile: () => ({ kind: "file" }) },
@@ -100,7 +103,13 @@ it("preserves Backlog, Table, search and scroll when reading a card and returnin
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
   const scroll = host.querySelector("table")!.parentElement!;
-  scroll.scrollTop = 180;
+  // A real browser clamps scrollTop to what overflows, and tests load no
+  // stylesheet, so make the table's container scroll.
+  scroll.style.height = "1px";
+  scroll.style.overflow = "auto";
+  const scrolledTo = scroll.scrollHeight - scroll.clientHeight;
+  expect(scrolledTo).toBeGreaterThan(0);
+  scroll.scrollTop = scrolledTo;
   await click(host, "Parked task");
   expect(host.querySelector("pre")?.textContent).toBe("Card source");
   await click(host, "Tasks");
@@ -113,6 +122,6 @@ it("preserves Backlog, Table, search and scroll when reading a card and returnin
   expect(
     host.querySelector('[aria-label="Task view"] button[aria-pressed="true"]')?.textContent,
   ).toBe("Table");
-  expect(host.querySelector("table")?.parentElement?.scrollTop).toBe(180);
+  expect(host.querySelector("table")?.parentElement?.scrollTop).toBe(scrolledTo);
   expect(host.querySelector("table")?.closest("[hidden]")).toBeNull();
 });
