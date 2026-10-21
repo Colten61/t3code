@@ -177,6 +177,28 @@ describe("resolveThreadListV2Status", () => {
     ).toBe("waiting");
   });
 
+  it("keeps an idle Codex thread ready when only a server command remains", () => {
+    for (const pendingBackgroundTasks of [[], [{ taskId: "server", kind: "command" as const }]]) {
+      expect(
+        resolveThreadListV2Status(
+          makeThread({
+            id: ThreadId.make("idle-codex"),
+            title: "Idle Codex",
+            pendingBackgroundTasks,
+            runtime: {
+              status: "idle",
+              activeRunId: null,
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              providerName: "Codex",
+              lastError: null,
+              updatedAt: NOW,
+            },
+          }),
+        ),
+      ).toBe("ready");
+    }
+  });
+
   it.each([
     { kind: "command", status: "ready" },
     { kind: "monitor", status: "waiting" },

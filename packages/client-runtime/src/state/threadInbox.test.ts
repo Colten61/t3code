@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   createInboxReturnTracker,
+  isThreadWorking,
   sortWorkingThreadsBySend,
   workingFamilyByThread,
 } from "./threadInbox.ts";
@@ -32,6 +33,28 @@ function thread(id: string, working: boolean) {
       : null,
   };
 }
+
+describe("isThreadWorking", () => {
+  it("requires pending work before treating an idle Codex runtime as Working", () => {
+    const idle = {
+      ...thread("codex-idle", true),
+      runtime: { ...thread("codex-idle", true).runtime!, status: "idle" as const },
+    };
+    expect(isThreadWorking(idle)).toBe(false);
+    expect(
+      isThreadWorking({
+        ...idle,
+        pendingBackgroundTasks: [{ taskId: "server", kind: "command" }],
+      }),
+    ).toBe(false);
+    expect(
+      isThreadWorking({
+        ...idle,
+        pendingBackgroundTasks: [{ taskId: "review", kind: "subagent" }],
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("createInboxReturnTracker", () => {
   it("stamps a thread when it stops working, but never on the first observation", () => {

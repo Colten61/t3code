@@ -54,6 +54,178 @@ const driver = ProviderDriverKind.make("codex");
 const providerInstanceId = modelSelection.instanceId;
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
+it.effect.each(["memory", "sql"] as const)(
+  "native child shells follow their root turn (%s)",
+  (store) =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:native-child-shell");
+      const providerThreadId = ProviderThreadId.make("provider-thread:native-child-shell");
+      const rootNodeId = NodeId.make("node:native-child-shell");
+      const providerTurnId = ProviderTurnId.make("provider-turn:native-child-shell");
+      yield* projections.apply({
+        id: EventId.make("native-child-shell:thread"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "agent",
+          creationSource: "provider",
+          id: threadId,
+          projectId: ProjectId.make("project:native-child-shell"),
+          title: "Native Codex child",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: providerThreadId,
+          lineage: {
+            parentThreadId: ThreadId.make("thread:native-parent"),
+            relationshipToParent: "subagent",
+            rootThreadId: ThreadId.make("thread:native-parent"),
+          },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      yield* projections.apply({
+        id: EventId.make("native-child-shell:turn"),
+        type: "provider-turn.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: providerTurnId,
+          providerThreadId,
+          nodeId: rootNodeId,
+          runAttemptId: null,
+          nativeTurnRef: null,
+          ordinal: 1,
+          status: "running",
+          startedAt: now,
+          completedAt: null,
+        },
+      });
+      for (const status of [
+        "pending",
+        "running",
+        "waiting",
+        "completed",
+        "interrupted",
+        "failed",
+      ] as const) {
+        yield* projections.apply({
+          id: EventId.make(`native-child-shell:root:${status}`),
+          type: "node.updated",
+          threadId,
+          nodeId: rootNodeId,
+          occurredAt: now,
+          payload: {
+            id: rootNodeId,
+            threadId,
+            runId: null,
+            parentNodeId: null,
+            rootNodeId,
+            kind: "root_turn",
+            status,
+            countsForRun: false,
+            providerThreadId,
+            providerTurnId,
+            nativeItemRef: null,
+            runtimeRequestId: null,
+            checkpointScopeId: null,
+            startedAt: now,
+            completedAt: ["completed", "interrupted", "failed"].includes(status) ? now : null,
+          },
+        });
+        const projection = yield* projections.getThreadProjection(threadId);
+        assert.lengthOf(projection.runs, 0);
+        const expected = status === "pending" ? "starting" : status;
+        for (const shell of [
+          ProjectionStore.threadShellFromProjection(projection),
+          yield* projections.getThreadShell(threadId),
+          (yield* projections.getShellSnapshot()).threads.find((thread) => thread.id === threadId),
+        ]) {
+          assert.equal(shell?.status, expected);
+          assert.isNull(shell?.latestRunId);
+          assert.isNull(shell?.activeRunId);
+          assert.equal(
+            shell?.activityRunStartedAt == null
+              ? null
+              : DateTime.formatIso(shell.activityRunStartedAt),
+            ["pending", "running", "waiting"].includes(status) ? DateTime.formatIso(now) : null,
+          );
+        }
+      }
+      const previousRoot = (yield* projections.getThreadProjection(threadId)).nodes[0]!;
+      const nextRootId = NodeId.make("node:a-native-child-next");
+      const nextProviderTurnId = ProviderTurnId.make("provider-turn:native-child-shell:next");
+      // Native timestamps have second precision; item IDs are not turn order.
+      const nextStartedAt = now;
+      yield* projections.apply({
+        id: EventId.make("native-child-shell:next-turn"),
+        type: "provider-turn.updated",
+        threadId,
+        occurredAt: nextStartedAt,
+        payload: {
+          id: nextProviderTurnId,
+          providerThreadId,
+          nodeId: nextRootId,
+          runAttemptId: null,
+          nativeTurnRef: null,
+          ordinal: 2,
+          status: "running",
+          startedAt: nextStartedAt,
+          completedAt: null,
+        },
+      });
+      yield* projections.apply({
+        id: EventId.make("native-child-shell:next-root"),
+        type: "node.updated",
+        threadId,
+        nodeId: nextRootId,
+        occurredAt: nextStartedAt,
+        payload: {
+          ...previousRoot,
+          id: nextRootId,
+          rootNodeId: nextRootId,
+          providerTurnId: nextProviderTurnId,
+          status: "running",
+          startedAt: nextStartedAt,
+          completedAt: null,
+        },
+      });
+      yield* projections.apply({
+        id: EventId.make("native-child-shell:late-old-completion"),
+        type: "node.updated",
+        threadId,
+        nodeId: previousRoot.id,
+        occurredAt: nextStartedAt,
+        payload: { ...previousRoot, status: "completed", completedAt: nextStartedAt },
+      });
+      const latest = yield* projections.getThreadProjection(threadId);
+      for (const shell of [
+        ProjectionStore.threadShellFromProjection(latest),
+        yield* projections.getThreadShell(threadId),
+        (yield* projections.getShellSnapshot()).threads.find((thread) => thread.id === threadId),
+      ]) {
+        assert.equal(shell?.status, "running");
+        assert.equal(
+          DateTime.formatIso(shell!.activityRunStartedAt!),
+          DateTime.formatIso(nextStartedAt),
+        );
+      }
+    }).pipe(Effect.provide(store === "memory" ? ProjectionStore.layerMemory : layerTest)),
+);
+
 const traceSqlStatements = () => {
   const statements: Array<string> = [];
   const tracer = Tracer.make({

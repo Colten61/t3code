@@ -26,6 +26,7 @@ import {
 } from "./models.ts";
 import { v2Projection, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 import { deriveLatestThreadRun, deriveThreadRuntime } from "./threadExecution.ts";
+import { isThreadWorking } from "./threadInbox.ts";
 import { derivePendingThreadRequests } from "./threadRequests.ts";
 
 const environmentId = EnvironmentId.make("environment-v2");
@@ -68,6 +69,23 @@ describe("scoped entity keys", () => {
 });
 
 describe("V2 client presentation", () => {
+  it.each(["running", "completed"] as const)(
+    "uses a native child's %s shell status without creating an app run",
+    (status) => {
+      const shell = presentThreadShell(environmentId, {
+        ...v2ThreadShell,
+        latestRunId: null,
+        activeRunId: null,
+        activeProviderThreadId: ProviderThreadId.make("native-child"),
+        status,
+        pendingBackgroundTasks: [],
+      });
+      expect(shell.latestRun).toBeNull();
+      expect(shell.runtime?.status).toBe(status);
+      expect(isThreadWorking(shell)).toBe(status === "running");
+    },
+  );
+
   it("presents shell timestamps and status without constructing V1 state", () => {
     const shell = presentThreadShell(environmentId, v2ThreadShell);
     expect(shell.environmentId).toBe(environmentId);
