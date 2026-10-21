@@ -664,8 +664,8 @@ const make = Effect.gen(function* () {
    * later: they are removed, and this process ignores them until a write
    * succeeds.
    */
-  const discardRememberedHardCaps = (cause: unknown) =>
-    Effect.gen(function* () {
+  const discardRememberedHardCaps = Effect.fn("serverSettings.discardRememberedHardCaps")(
+    function* (cause: unknown) {
       yield* Ref.set(rememberedHardCapsStale, true);
       yield* Effect.logError(
         "failed to remember the provider hard caps; discarding the remembered ones, which may be older than the settings",
@@ -681,22 +681,24 @@ const make = Effect.gen(function* () {
             ),
           ),
         );
-    });
+    },
+  );
 
   /** After a valid load, the remembered caps follow the settings. */
-  const rememberLoadedHardCaps = (settings: ServerSettings) =>
-    Effect.gen(function* () {
-      const contents = yield* rememberedHardCapsContentsOf(settings);
-      const current = yield* readRememberedHardCapsContents;
-      if (
-        Option.isSome(current) &&
-        current.value === contents &&
-        !(yield* Ref.get(rememberedHardCapsStale))
-      ) {
-        return;
-      }
-      yield* writeRememberedHardCapsContents(contents);
-    }).pipe(Effect.catch(discardRememberedHardCaps));
+  const rememberLoadedHardCaps = Effect.fn("serverSettings.rememberLoadedHardCaps")(function* (
+    settings: ServerSettings,
+  ) {
+    const contents = yield* rememberedHardCapsContentsOf(settings);
+    const current = yield* readRememberedHardCapsContents;
+    if (
+      Option.isSome(current) &&
+      current.value === contents &&
+      !(yield* Ref.get(rememberedHardCapsStale))
+    ) {
+      return;
+    }
+    yield* writeRememberedHardCapsContents(contents);
+  }, Effect.catch(discardRememberedHardCaps));
 
   /** Puts back what a failed save replaced, or discards it. */
   const restoreRememberedHardCaps = (previous: Option.Option<string>) =>
@@ -713,30 +715,32 @@ const make = Effect.gen(function* () {
    * remembered leaves the caps unknown, so every instance fails closed until
    * the file is fixed; a missing one with nothing remembered is a fresh start.
    */
-  const withLastValidHardCaps = (settings: ServerSettings, file: "missing" | "invalid") =>
-    Effect.gen(function* () {
-      const remembered = yield* readRememberedHardCaps;
-      if (Option.isSome(remembered)) {
-        yield* Effect.logWarning(
-          `settings.json is ${file}; keeping the provider hard caps of the last valid settings`,
-          { path: settingsPath, hardCapsPath },
-        );
-        const restored = withRememberedHardCaps(settings, remembered.value);
-        yield* Ref.set(fallbackHardCaps, {
-          settings: restored,
-          caps: rememberedHardCapsInForce(remembered.value),
-        });
-        return restored;
-      }
-      if (file === "invalid") {
-        yield* Effect.logError(
-          "settings.json is invalid and no provider hard caps are remembered; every provider instance runs under the strictest cap until it is fixed",
-          { path: settingsPath, hardCapsPath },
-        );
-        yield* Ref.set(fallbackHardCaps, { settings, caps: undefined });
-      }
-      return settings;
-    });
+  const withLastValidHardCaps = Effect.fn("serverSettings.withLastValidHardCaps")(function* (
+    settings: ServerSettings,
+    file: "missing" | "invalid",
+  ) {
+    const remembered = yield* readRememberedHardCaps;
+    if (Option.isSome(remembered)) {
+      yield* Effect.logWarning(
+        `settings.json is ${file}; keeping the provider hard caps of the last valid settings`,
+        { path: settingsPath, hardCapsPath },
+      );
+      const restored = withRememberedHardCaps(settings, remembered.value);
+      yield* Ref.set(fallbackHardCaps, {
+        settings: restored,
+        caps: rememberedHardCapsInForce(remembered.value),
+      });
+      return restored;
+    }
+    if (file === "invalid") {
+      yield* Effect.logError(
+        "settings.json is invalid and no provider hard caps are remembered; every provider instance runs under the strictest cap until it is fixed",
+        { path: settingsPath, hardCapsPath },
+      );
+      yield* Ref.set(fallbackHardCaps, { settings, caps: undefined });
+    }
+    return settings;
+  });
 
   const readConfigExists = fs.exists(settingsPath).pipe(
     Effect.mapError(

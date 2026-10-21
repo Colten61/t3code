@@ -4101,7 +4101,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         // When the last of that work ended, so an idle stop can start its
         // window from there however late it looks.
         const idleStopHoldEndedAtMs = yield* Ref.make<number | null>(null);
-        const updateIdleStopWorks = (
+        // Untraced: it runs on every process event, inside the session's own span.
+        const updateIdleStopWorks = Effect.fnUntraced(function* (
           update: (
             current: ReadonlyMap<
               number,
@@ -4111,19 +4112,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             number,
             { readonly nativeThreadId: string; readonly work: ClaudeIdleStopWork }
           >,
-        ) =>
-          Effect.gen(function* () {
-            const now = DateTime.toEpochMillis(yield* DateTime.now);
-            const ended = yield* Ref.modify(idleStopWorkByProcess, (current) => {
-              const next = update(current);
-              return [
-                anyClaudeIdleStopWorkHolds(idleStopWorks(current)) &&
-                  !anyClaudeIdleStopWorkHolds(idleStopWorks(next)),
-                next,
-              ] as const;
-            });
-            if (ended) yield* Ref.set(idleStopHoldEndedAtMs, now);
+        ) {
+          const now = DateTime.toEpochMillis(yield* DateTime.now);
+          const ended = yield* Ref.modify(idleStopWorkByProcess, (current) => {
+            const next = update(current);
+            return [
+              anyClaudeIdleStopWorkHolds(idleStopWorks(current)) &&
+                !anyClaudeIdleStopWorkHolds(idleStopWorks(next)),
+              next,
+            ] as const;
           });
+          if (ended) yield* Ref.set(idleStopHoldEndedAtMs, now);
+        });
         /** Updates one process's work; a process that has gone stays gone. */
         const updateIdleStopProcess = (
           processId: number,

@@ -16,7 +16,7 @@ export const NightPlan = Schema.Struct({
   /** How long the briefing waits for "I'm leaving" before the night starts on its own. */
   briefingMinutes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 240 })),
   end: Schema.Struct({
-    /** Started once nothing works any more, such as agents for TODO cards. */
+    /** Started once nothing works any more, such as agents for task cards. */
     agents: Schema.Array(AgentLaunch),
     /** How many of those agents work at once; all of them when absent. */
     maxAgents: Schema.optional(AgentQueueMaxRunning),

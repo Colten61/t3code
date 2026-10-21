@@ -161,17 +161,16 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const setState = (state: NightState | null) =>
-    Effect.gen(function* () {
-      yield* persist(state);
-      yield* Ref.set(stateRef, state);
-      yield* rules.set(
-        nightRulesApply(state) && state !== null
-          ? { rules: nightRules(), overseerThreadId: state.overseerThreadId }
-          : null,
-      );
-      yield* PubSub.publish(changes, state);
-    });
+  const setState = Effect.fn("NightService.setState")(function* (state: NightState | null) {
+    yield* persist(state);
+    yield* Ref.set(stateRef, state);
+    yield* rules.set(
+      nightRulesApply(state) && state !== null
+        ? { rules: nightRules(), overseerThreadId: state.overseerThreadId }
+        : null,
+    );
+    yield* PubSub.publish(changes, state);
+  });
 
   const wakeOverseer = (state: NightState, key: string, text: string) =>
     threads
@@ -229,143 +228,139 @@ export const make = Effect.gen(function* () {
     };
   });
 
-  const beginNight = (state: NightState, trigger: "leave" | "timer") =>
-    Effect.gen(function* () {
-      const nowMs = yield* Clock.currentTimeMillis;
-      const next: NightState = { ...state, phase: "night", nightStartedAt: isoAt(nowMs) };
-      yield* setState(next);
-      runtime.workingSessions = null;
-      yield* wakeOverseer(next, "night", nightLeftMessage(trigger));
-      return next;
-    });
+  const beginNight = Effect.fn("NightService.beginNight")(function* (
+    state: NightState,
+    trigger: "leave" | "timer",
+  ) {
+    const nowMs = yield* Clock.currentTimeMillis;
+    const next: NightState = { ...state, phase: "night", nightStartedAt: isoAt(nowMs) };
+    yield* setState(next);
+    runtime.workingSessions = null;
+    yield* wakeOverseer(next, "night", nightLeftMessage(trigger));
+    return next;
+  });
 
-  const startAgents = (state: NightState) =>
-    Effect.gen(function* () {
-      const { agents, maxAgents } = state.plan.end;
-      // The queue starts the first ones now and each next one as a slot frees up.
-      const queued = yield* agentQueue
-        .start({
-          label: "End-of-night agents",
-          maxRunning: Math.min(maxAgents ?? agents.length, 50),
-          launches: agents,
-        })
-        .pipe(Effect.result);
-      const started =
-        queued._tag === "Success"
-          ? queued.success.started.map((thread) => ({ id: thread.threadId, title: thread.title }))
-          : [];
-      const failed =
-        queued._tag === "Success"
-          ? queued.success.failed
-          : [{ title: `${agents.length} agents`, reason: errorDetail(queued.failure) }];
-      const waiting = queued._tag === "Success" ? queued.success.waiting.length : 0;
-      const next: NightState = {
-        ...state,
-        phase: "ending",
-        agentsStarted: true,
-        endThreadIds: [...state.endThreadIds, ...started.map((thread) => thread.id)],
-      };
-      yield* setState(next);
-      yield* wakeOverseer(
-        next,
-        "agents",
-        nightEndStartedMessage({ what: "agents", started, failed, waiting }),
-      );
-    });
+  const startAgents = Effect.fn("NightService.startAgents")(function* (state: NightState) {
+    const { agents, maxAgents } = state.plan.end;
+    // The queue starts the first ones now and each next one as a slot frees up.
+    const queued = yield* agentQueue
+      .start({
+        label: "End-of-night agents",
+        maxRunning: Math.min(maxAgents ?? agents.length, 50),
+        launches: agents,
+      })
+      .pipe(Effect.result);
+    const started =
+      queued._tag === "Success"
+        ? queued.success.started.map((thread) => ({ id: thread.threadId, title: thread.title }))
+        : [];
+    const failed =
+      queued._tag === "Success"
+        ? queued.success.failed
+        : [{ title: `${agents.length} agents`, reason: errorDetail(queued.failure) }];
+    const waiting = queued._tag === "Success" ? queued.success.waiting.length : 0;
+    const next: NightState = {
+      ...state,
+      phase: "ending",
+      agentsStarted: true,
+      endThreadIds: [...state.endThreadIds, ...started.map((thread) => thread.id)],
+    };
+    yield* setState(next);
+    yield* wakeOverseer(
+      next,
+      "agents",
+      nightEndStartedMessage({ what: "agents", started, failed, waiting }),
+    );
+  });
 
-  const startQueued = (state: NightState, index: number) =>
-    Effect.gen(function* () {
-      const launch = state.plan.end.queue[index];
-      if (launch === undefined) return;
-      const result = yield* Effect.result(launchEnd(state, `queue:${index}`, launch));
-      const next: NightState = {
-        ...state,
-        phase: "ending",
-        queueStarted: index + 1,
-        endThreadIds:
-          result._tag === "Success"
-            ? [...state.endThreadIds, result.success.id]
-            : state.endThreadIds,
-      };
-      yield* setState(next);
-      yield* wakeOverseer(
-        next,
-        `queued:${index}`,
-        nightEndStartedMessage({
-          what: "queued",
-          started: result._tag === "Success" ? [result.success] : [],
-          failed: result._tag === "Failure" ? [result.failure] : [],
-          position: { index, total: state.plan.end.queue.length },
-        }),
-      );
-    });
+  const startQueued = Effect.fn("NightService.startQueued")(function* (
+    state: NightState,
+    index: number,
+  ) {
+    const launch = state.plan.end.queue[index];
+    if (launch === undefined) return;
+    const result = yield* Effect.result(launchEnd(state, `queue:${index}`, launch));
+    const next: NightState = {
+      ...state,
+      phase: "ending",
+      queueStarted: index + 1,
+      endThreadIds:
+        result._tag === "Success" ? [...state.endThreadIds, result.success.id] : state.endThreadIds,
+    };
+    yield* setState(next);
+    yield* wakeOverseer(
+      next,
+      `queued:${index}`,
+      nightEndStartedMessage({
+        what: "queued",
+        started: result._tag === "Success" ? [result.success] : [],
+        failed: result._tag === "Failure" ? [result.failure] : [],
+        position: { index, total: state.plan.end.queue.length },
+      }),
+    );
+  });
 
-  const requestReport = (state: NightState) =>
-    Effect.gen(function* () {
-      const nowMs = yield* Clock.currentTimeMillis;
-      const next: NightState = { ...state, phase: "report", reportRequestedAt: isoAt(nowMs) };
-      yield* setState(next);
-      yield* wakeOverseer(
-        next,
-        "report",
-        nightReportMessage(next.plan.end.powerOff && next.powerOffError === null),
-      );
-    });
+  const requestReport = Effect.fn("NightService.requestReport")(function* (state: NightState) {
+    const nowMs = yield* Clock.currentTimeMillis;
+    const next: NightState = { ...state, phase: "report", reportRequestedAt: isoAt(nowMs) };
+    yield* setState(next);
+    yield* wakeOverseer(
+      next,
+      "report",
+      nightReportMessage(next.plan.end.powerOff && next.powerOffError === null),
+    );
+  });
 
-  const finish = (state: NightState) =>
-    Effect.gen(function* () {
-      const nowMs = yield* Clock.currentTimeMillis;
-      const powerOff = state.plan.end.powerOff && state.powerOffError === null;
-      yield* setState({
-        ...state,
-        phase: "done",
-        doneAt: isoAt(nowMs),
-        poweringOffAt: powerOff ? isoAt(nowMs + POWER_OFF_GRACE_MS) : null,
-      });
+  const finish = Effect.fn("NightService.finish")(function* (state: NightState) {
+    const nowMs = yield* Clock.currentTimeMillis;
+    const powerOff = state.plan.end.powerOff && state.powerOffError === null;
+    yield* setState({
+      ...state,
+      phase: "done",
+      doneAt: isoAt(nowMs),
+      poweringOffAt: powerOff ? isoAt(nowMs + POWER_OFF_GRACE_MS) : null,
     });
+  });
 
   /** At the time set after the report: powers off, or waits a minute more while anything works. */
-  const powerOff = (state: NightState) =>
-    Effect.gen(function* () {
-      const nowMs = yield* Clock.currentTimeMillis;
-      const { threads: shells, autoResume } = yield* readThreads;
-      if (
-        !nothingWorks(shells, nowMs, autoResume) ||
-        nowMs - runtime.lastRunEventAtMs < QUIET_MS ||
-        (yield* agentQueue.hasWaiting)
-      ) {
-        yield* setState({ ...state, poweringOffAt: isoAt(nowMs + POWER_OFF_GRACE_MS) });
-        return;
+  const powerOff = Effect.fn("NightService.powerOff")(function* (state: NightState) {
+    const nowMs = yield* Clock.currentTimeMillis;
+    const { threads: shells, autoResume } = yield* readThreads;
+    if (
+      !nothingWorks(shells, nowMs, autoResume) ||
+      nowMs - runtime.lastRunEventAtMs < QUIET_MS ||
+      (yield* agentQueue.hasWaiting)
+    ) {
+      yield* setState({ ...state, poweringOffAt: isoAt(nowMs + POWER_OFF_GRACE_MS) });
+      return;
+    }
+    const command = powerOffCommand(platform);
+    if (command === null) {
+      yield* setState({
+        ...state,
+        poweringOffAt: null,
+        powerOffError: `T3 cannot power off a ${platform} computer.`,
+      });
+      return;
+    }
+    // Recorded first, so a T3 that starts again never powers off for an old night.
+    yield* setState({ ...state, poweringOffAt: null, poweredOffAt: isoAt(nowMs) });
+    yield* Effect.logInfo("night.power-off", { command: command.command });
+    const outcome = yield* Effect.result(processRunner.run({ ...command, timeout: "30 seconds" }));
+    const failure =
+      outcome._tag === "Failure"
+        ? errorDetail(outcome.failure)
+        : outcome.success.code !== 0
+          ? outcome.success.stderr.trim() ||
+            `${command.command} exited with ${outcome.success.code}`
+          : null;
+    if (failure !== null) {
+      const current = yield* Ref.get(stateRef);
+      if (current !== null && current.id === state.id) {
+        yield* setState({ ...current, poweredOffAt: null, powerOffError: failure });
       }
-      const command = powerOffCommand(platform);
-      if (command === null) {
-        yield* setState({
-          ...state,
-          poweringOffAt: null,
-          powerOffError: `T3 cannot power off a ${platform} computer.`,
-        });
-        return;
-      }
-      // Recorded first, so a T3 that starts again never powers off for an old night.
-      yield* setState({ ...state, poweringOffAt: null, poweredOffAt: isoAt(nowMs) });
-      yield* Effect.logInfo("night.power-off", { command: command.command });
-      const outcome = yield* Effect.result(
-        processRunner.run({ ...command, timeout: "30 seconds" }),
-      );
-      const failure =
-        outcome._tag === "Failure"
-          ? errorDetail(outcome.failure)
-          : outcome.success.code !== 0
-            ? outcome.success.stderr.trim() ||
-              `${command.command} exited with ${outcome.success.code}`
-            : null;
-      if (failure !== null) {
-        const current = yield* Ref.get(stateRef);
-        if (current !== null && current.id === state.id) {
-          yield* setState({ ...current, poweredOffAt: null, powerOffError: failure });
-        }
-      }
-    });
+    }
+  });
 
   /** Runs every scheduler tick; does work only when something is due. */
   const runDueWork = locked(
@@ -427,51 +422,51 @@ export const make = Effect.gen(function* () {
     }),
   ).pipe(Effect.catchCause((cause) => Effect.logWarning("night.check-failed", { cause })));
 
-  const onRequest = (
+  const onRequest = Effect.fn("NightService.onRequest")(function* (
     event: Extract<OrchestrationV2DomainEvent, { readonly type: "runtime-request.updated" }>,
-  ) =>
-    Effect.gen(function* () {
-      const state = yield* Ref.get(stateRef);
-      if (!overseerWatches(state) || event.threadId === state.overseerThreadId) return;
-      const shell = yield* threads.getThreadShell(event.threadId);
-      if (shell === null || !isNightSession(shell, state.overseerThreadId)) return;
-      yield* wakeOverseer(
-        state,
-        `request:${event.payload.id}`,
-        nightRequestMessage(shell, event.payload),
-      );
-    });
+  ) {
+    const state = yield* Ref.get(stateRef);
+    if (!overseerWatches(state) || event.threadId === state.overseerThreadId) return;
+    const shell = yield* threads.getThreadShell(event.threadId);
+    if (shell === null || !isNightSession(shell, state.overseerThreadId)) return;
+    yield* wakeOverseer(
+      state,
+      `request:${event.payload.id}`,
+      nightRequestMessage(shell, event.payload),
+    );
+  });
 
-  const onContext = (
+  const onContext = Effect.fn("NightService.onContext")(function* (
     event: Extract<OrchestrationV2DomainEvent, { readonly type: "provider-turn.updated" }>,
     ratio: number,
-  ) =>
-    Effect.gen(function* () {
-      const state = yield* Ref.get(stateRef);
-      if (!overseerWatches(state)) return;
-      runtime.contextWarned.add(event.threadId);
-      if (event.threadId === state.overseerThreadId) {
-        // Compacted between its turns, so the overseer never loses one mid-way.
-        runtime.overseerNeedsCompact = true;
-        return;
-      }
-      const shell = yield* threads.getThreadShell(event.threadId);
-      if (shell === null || !isNightSession(shell, state.overseerThreadId)) return;
-      yield* wakeOverseer(
-        state,
-        `context:${event.threadId}:${event.payload.id}`,
-        nightContextMessage(shell, ratio),
-      );
-    });
+  ) {
+    const state = yield* Ref.get(stateRef);
+    if (!overseerWatches(state)) return;
+    runtime.contextWarned.add(event.threadId);
+    if (event.threadId === state.overseerThreadId) {
+      // Compacted between its turns, so the overseer never loses one mid-way.
+      runtime.overseerNeedsCompact = true;
+      return;
+    }
+    const shell = yield* threads.getThreadShell(event.threadId);
+    if (shell === null || !isNightSession(shell, state.overseerThreadId)) return;
+    yield* wakeOverseer(
+      state,
+      `context:${event.threadId}:${event.payload.id}`,
+      nightContextMessage(shell, ratio),
+    );
+  });
 
-  const onRun = (event: Extract<OrchestrationV2DomainEvent, { readonly type: "run.updated" }>) =>
-    Effect.gen(function* () {
-      if (!runtime.overseerNeedsCompact || !TERMINAL_RUN_STATUSES.has(event.payload.status)) return;
-      const state = yield* Ref.get(stateRef);
-      if (!overseerWatches(state) || event.threadId !== state.overseerThreadId) return;
-      runtime.overseerNeedsCompact = false;
-      yield* wakeOverseer(state, `compact:${event.payload.id}`, "/compact");
-    });
+  // Untraced: it runs for every run update and nearly always returns at once.
+  const onRun = Effect.fnUntraced(function* (
+    event: Extract<OrchestrationV2DomainEvent, { readonly type: "run.updated" }>,
+  ) {
+    if (!runtime.overseerNeedsCompact || !TERMINAL_RUN_STATUSES.has(event.payload.status)) return;
+    const state = yield* Ref.get(stateRef);
+    if (!overseerWatches(state) || event.threadId !== state.overseerThreadId) return;
+    runtime.overseerNeedsCompact = false;
+    yield* wakeOverseer(state, `compact:${event.payload.id}`, "/compact");
+  });
 
   /** Sees every domain event, so anything it does not need returns at once. */
   const onEvent = (event: OrchestrationV2DomainEvent): Effect.Effect<void> => {

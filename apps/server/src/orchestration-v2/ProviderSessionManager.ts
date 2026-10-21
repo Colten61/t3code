@@ -1232,29 +1232,30 @@ export const layerWithOptions = (
         runtime.hasPendingBackgroundWork === undefined
           ? Effect.succeed(false)
           : runtime.hasPendingBackgroundWork.pipe(Effect.catchCause(() => Effect.succeed(true)));
-      const idleStopHolds = (entry: LiveSessionEntry) =>
-        Effect.gen(function* () {
-          const holds: Array<IdleStopHold> = [];
-          let lastHeldAtMs: number | null = null;
-          const later = (at: number | null) => {
-            if (at !== null && (lastHeldAtMs === null || at > lastHeldAtMs)) lastHeldAtMs = at;
-          };
-          if (entry.runtime.readIdleStopHold !== undefined) {
-            const process = yield* entry.runtime.readIdleStopHold.pipe(
-              Effect.catchCause(() => Effect.succeed({ held: true, lastHeldAtMs: null })),
-            );
-            if (process.held) holds.push("background_work");
-            later(process.lastHeldAtMs);
-          } else if (yield* sampledBackgroundWork(entry.runtime)) {
-            holds.push("background_work");
-          }
-          for (const threadId of entry.attachedThreadIds) {
-            const thread = yield* threadIdleStopHolds(projectionStore, threadId);
-            holds.push(...thread.holds);
-            later(thread.lastHeldAtMs);
-          }
-          return { holds, lastHeldAtMs: lastHeldAtMs as number | null };
-        });
+      const idleStopHolds = Effect.fn("ProviderSessionManager.idleStopHolds")(function* (
+        entry: LiveSessionEntry,
+      ) {
+        const holds: Array<IdleStopHold> = [];
+        let lastHeldAtMs: number | null = null;
+        const later = (at: number | null) => {
+          if (at !== null && (lastHeldAtMs === null || at > lastHeldAtMs)) lastHeldAtMs = at;
+        };
+        if (entry.runtime.readIdleStopHold !== undefined) {
+          const process = yield* entry.runtime.readIdleStopHold.pipe(
+            Effect.catchCause(() => Effect.succeed({ held: true, lastHeldAtMs: null })),
+          );
+          if (process.held) holds.push("background_work");
+          later(process.lastHeldAtMs);
+        } else if (yield* sampledBackgroundWork(entry.runtime)) {
+          holds.push("background_work");
+        }
+        for (const threadId of entry.attachedThreadIds) {
+          const thread = yield* threadIdleStopHolds(projectionStore, threadId);
+          holds.push(...thread.holds);
+          later(thread.lastHeldAtMs);
+        }
+        return { holds, lastHeldAtMs: lastHeldAtMs as number | null };
+      });
 
       // FORK (T3MIG-FORK-014): holds are checked every minute from the start
       // of the idle window, not only at its end, and the window starts again

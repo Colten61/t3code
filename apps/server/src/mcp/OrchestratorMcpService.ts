@@ -990,12 +990,12 @@ const make = Effect.gen(function* () {
    * ceiling (`resolved`) and the instance's hard cap. Unreadable settings
    * refuse the start rather than skip the cap.
    */
-  const hardCappedChildRuntimeMode = (input: {
-    readonly instanceId: ProviderInstanceId;
-    readonly requested: OrchestratorMcpRuntimeMode | undefined;
-    readonly resolved: RuntimeMode;
-  }): Effect.Effect<RuntimeMode, OrchestratorMcpFailure> =>
-    Effect.gen(function* () {
+  const hardCappedChildRuntimeMode = Effect.fn("OrchestratorMcpService.hardCappedChildRuntimeMode")(
+    function* (input: {
+      readonly instanceId: ProviderInstanceId;
+      readonly requested: OrchestratorMcpRuntimeMode | undefined;
+      readonly resolved: RuntimeMode;
+    }): Effect.fn.Return<RuntimeMode, OrchestratorMcpFailure> {
       const caps = yield* readProviderInstanceHardCaps(serverSettings).pipe(
         Effect.mapError((error) =>
           failure(
@@ -1015,7 +1015,8 @@ const make = Effect.gen(function* () {
             "runtime_mode_escalation_denied",
             `Child runtime mode ${outcome.runtimeMode} is broader than ${input.instanceId}'s hard cap ${outcome.ceiling}.`,
           );
-    });
+    },
+  );
 
   const requireProject = (projectId: ProjectId) =>
     projects.getById(projectId).pipe(

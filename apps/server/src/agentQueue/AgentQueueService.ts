@@ -76,32 +76,33 @@ export const make = Effect.gen(function* () {
   const locked = lock.withPermits(1);
   let lastCheckAtMs = 0;
 
-  const setQueues = (queues: ReadonlyArray<AgentQueue>) =>
-    Effect.gen(function* () {
-      // Only queues with launches left are kept; the rest have done their work.
-      const kept = queues.filter((queue) => queue.waiting.length > 0);
-      yield* (
-        kept.length === 0
-          ? fs.remove(statePath, { force: true })
-          : encodeQueues(kept).pipe(
-              Effect.flatMap((contents) =>
-                writeFileStringAtomically({ filePath: statePath, contents: `${contents}\n` }),
-              ),
-              Effect.provideService(FileSystem.FileSystem, fs),
-              Effect.provideService(Path.Path, path),
-            )
-      ).pipe(
-        Effect.mapError(
-          (cause) =>
-            new AgentQueueError({
-              operation: "persist",
-              detail: `Could not save the agent queue: ${errorDetail(cause)}`,
-            }),
-        ),
-      );
-      yield* Ref.set(queuesRef, kept);
-      yield* PubSub.publish(changes, kept);
-    });
+  const setQueues = Effect.fn("AgentQueueService.setQueues")(function* (
+    queues: ReadonlyArray<AgentQueue>,
+  ) {
+    // Only queues with launches left are kept; the rest have done their work.
+    const kept = queues.filter((queue) => queue.waiting.length > 0);
+    yield* (
+      kept.length === 0
+        ? fs.remove(statePath, { force: true })
+        : encodeQueues(kept).pipe(
+            Effect.flatMap((contents) =>
+              writeFileStringAtomically({ filePath: statePath, contents: `${contents}\n` }),
+            ),
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.provideService(Path.Path, path),
+          )
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentQueueError({
+            operation: "persist",
+            detail: `Could not save the agent queue: ${errorDetail(cause)}`,
+          }),
+      ),
+    );
+    yield* Ref.set(queuesRef, kept);
+    yield* PubSub.publish(changes, kept);
+  });
 
   const launch = (queue: AgentQueue, ordinal: number, launch: AgentLaunch) =>
     threadLaunch
@@ -126,22 +127,24 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.result);
 
   /** Starts as many waiting launches as the queue has free slots, in order. */
-  const fill = (queue: AgentQueue, works: (threadId: ThreadId) => boolean) =>
-    Effect.gen(function* () {
-      const count = launchesToStart(queue, works);
-      if (count === 0) return queue;
-      const started = [...queue.started];
-      const failed = [...queue.failed];
-      for (const item of queue.waiting.slice(0, count)) {
-        const result = yield* launch(queue, started.length + failed.length, item);
-        if (result._tag === "Success") {
-          started.push({ threadId: result.success.threadId, title: item.title });
-        } else {
-          failed.push({ title: item.title, reason: errorDetail(result.failure) });
-        }
+  const fill = Effect.fn("AgentQueueService.fill")(function* (
+    queue: AgentQueue,
+    works: (threadId: ThreadId) => boolean,
+  ) {
+    const count = launchesToStart(queue, works);
+    if (count === 0) return queue;
+    const started = [...queue.started];
+    const failed = [...queue.failed];
+    for (const item of queue.waiting.slice(0, count)) {
+      const result = yield* launch(queue, started.length + failed.length, item);
+      if (result._tag === "Success") {
+        started.push({ threadId: result.success.threadId, title: item.title });
+      } else {
+        failed.push({ title: item.title, reason: errorDetail(result.failure) });
       }
-      return { ...queue, started, failed, waiting: queue.waiting.slice(count) };
-    });
+    }
+    return { ...queue, started, failed, waiting: queue.waiting.slice(count) };
+  });
 
   const runDueWork = locked(
     Effect.gen(function* () {

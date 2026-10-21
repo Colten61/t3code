@@ -38,10 +38,14 @@ const decodeClaudeUserSettings = Schema.decodeUnknownEffect(
 );
 
 /** `idleCompaction` from `<configDir>/settings.json`; undefined when unset or unreadable. */
-export const readClaudeIdleCompactionSetting = (configDir: string) =>
-  Effect.gen(function* () {
+export const readClaudeIdleCompactionSetting = Effect.fn(
+  "ClaudeIdleCompaction.readClaudeIdleCompactionSetting",
+)(
+  function* (configDir: string) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const text = yield* fs.readFileString(path.join(configDir, "settings.json"));
     return (yield* decodeClaudeUserSettings(text)).idleCompaction;
-  }).pipe(Effect.orElseSucceed(() => undefined));
+  },
+  Effect.orElseSucceed(() => undefined),
+);
