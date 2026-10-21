@@ -102,12 +102,13 @@ export function useComposerAssist(input: {
   useEffect(() => {
     const previous = previousPromptRef.current;
     previousPromptRef.current = { draft, key: draftKey };
-    setStatus(null);
+    // A status belongs to this run's draft and settings; the next run starts without one.
+    const clearStatus = () => setStatus(null);
     if (previous.key !== draftKey || !enabled) {
       latest.current.editorRef.current?.showAssistCues(draft, []);
-      return;
+      return clearStatus;
     }
-    if (previous.draft === draft) return;
+    if (previous.draft === draft) return clearStatus;
     let current = true;
     const target = {
       ...(input.threadId === null ? {} : { threadId: input.threadId }),
@@ -120,8 +121,9 @@ export function useComposerAssist(input: {
       const assist = assistDraftOf(draft, literal);
       latest.current.editorRef.current?.showAssistCues(draft, []);
       if (composerBlankTooLong(assist)) {
+        // oxlint-disable-next-line react/set-state-in-effect -- A typed blank is told from the previous draft, which only this effect sees.
         setStatus({ kind: "note", text: "The draft is too long for a blank." });
-        return;
+        return clearStatus;
       }
       setStatus({ kind: "working" });
       void askAssist({
@@ -153,13 +155,14 @@ export function useComposerAssist(input: {
       });
       return () => {
         current = false;
+        clearStatus();
       };
     }
 
-    if (!wantsCues) return;
+    if (!wantsCues) return clearStatus;
     if (!wantsComposerCues(draft)) {
       latest.current.editorRef.current?.showAssistCues(draft, []);
-      return;
+      return clearStatus;
     }
     const timer = window.setTimeout(() => {
       if (latest.current.promptRef.current !== draft) return;
@@ -188,6 +191,7 @@ export function useComposerAssist(input: {
     return () => {
       current = false;
       window.clearTimeout(timer);
+      clearStatus();
     };
   }, [
     askAssist,

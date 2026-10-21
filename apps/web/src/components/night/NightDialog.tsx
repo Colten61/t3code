@@ -23,7 +23,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
 import { MoonIcon, PlusIcon, XIcon } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { getCustomModelOptionsByInstance } from "~/modelSelection";
@@ -94,16 +94,8 @@ function useModelChoices(project: EnvironmentProject) {
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(project.environmentId)) ??
     EMPTY_SERVER_PROVIDERS;
-  const instanceEntries = useMemo(
-    () =>
-      sortProviderInstanceEntries(
-        applyProviderInstanceSettings(
-          deriveProviderInstanceEntries(providers),
-          settings,
-          project.id,
-        ),
-      ),
-    [providers, settings, project.id],
+  const instanceEntries = sortProviderInstanceEntries(
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, project.id),
   );
   return {
     settings,
@@ -121,10 +113,11 @@ function ModelChoice(props: {
   const { settings, providers, instanceEntries } = useModelChoices(props.project);
   const { selection } = props;
   const activeEntry = instanceEntries.find((entry) => entry.instanceId === selection?.instanceId);
-  const modelOptionsByInstance = useMemo(
-    () =>
-      getCustomModelOptionsByInstance(settings, providers, selection?.instanceId, selection?.model),
-    [settings, providers, selection?.instanceId, selection?.model],
+  const modelOptionsByInstance = getCustomModelOptionsByInstance(
+    settings,
+    providers,
+    selection?.instanceId,
+    selection?.model,
   );
   if (!selection || !activeEntry) {
     return <span className="text-sm text-muted-foreground">No providers available</span>;
@@ -239,11 +232,9 @@ function NightSetup(props: {
       : null,
   );
   const snapshot = board.data?.available ? board.data.snapshot : null;
-  const cards = useMemo(
-    () =>
-      snapshot ? [...snapshot.cards, ...snapshot.backlog_cards].filter(canStartTaskAgent) : [],
-    [snapshot],
-  );
+  const cards = snapshot
+    ? [...snapshot.cards, ...snapshot.backlog_cards].filter(canStartTaskAgent)
+    : [];
   const pickedCards = cards.filter((card) => selectedCards.has(card.id));
   const orchestrator = mode === "orchestrator" && pickedCards.length > 0;
   const instructionsFile = useEnvironmentQuery(

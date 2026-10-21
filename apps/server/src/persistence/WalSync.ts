@@ -7,7 +7,7 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 
 // FORK: the server commits with synchronous=NORMAL, where SQLite syncs the WAL
-// only at checkpoints (every ~40 MB). Syncing it once a second bounds what a
+// only at checkpoints (the checkpoint worker's, every 1,000 pages). Syncing it once a second bounds what a
 // power loss or OS crash can take to the last second (group commit), at one
 // fdatasync a second instead of one per commit; with nothing new to write, the
 // call does no I/O. A worker thread does it, so a main thread blocked in a

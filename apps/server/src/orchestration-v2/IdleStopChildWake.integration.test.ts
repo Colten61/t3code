@@ -131,8 +131,10 @@ it.effect("FORK: a parent stopped while idle resumes its session on a child's re
                     offers.push(message);
                   }),
                 setModel: () => Effect.void,
+                applyFlagSettings: () => Effect.void,
                 setPermissionMode: () => Effect.void,
                 stopTask: () => Effect.void,
+                backgroundTasks: () => Effect.succeed(false),
                 interrupt: Effect.void,
                 close: Effect.sync(() => {
                   process.closed = true;

@@ -1,11 +1,6 @@
 import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-/**
- * ProviderDriverError - A driver `create` call failed before producing an
- * instance. Surfaced to the registry, which marks the offending entry as
- * an "unavailable" shadow snapshot rather than crashing the server.
- */
 export class ProviderDriverError extends Schema.TaggedError<ProviderDriverError>()(
   "ProviderDriverError",
   {
@@ -33,7 +28,6 @@ export class ProviderComposerAssistError extends Schema.TaggedError<ProviderComp
   }
 }
 
-/** Reading or writing a provider's stored credentials failed. */
 export class ProviderCredentialError extends Schema.TaggedError<ProviderCredentialError>()(
   "ProviderCredentialError",
   {

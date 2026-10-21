@@ -79,7 +79,7 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly projection?: OrchestrationV2ThreadProjection;
   readonly projectionRequests?: ThreadId[];
   readonly advertiseServerResolvedCommandContext?: boolean;
-  readonly advertiseServerResolvedThreadStop?: boolean;
+  readonly advertiseThreadStop?: boolean;
 }) {
   const client = {
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
@@ -127,12 +127,10 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
       environment: {
         capabilities: {
           repositoryIdentity: true,
+          ...(input.advertiseThreadStop === true ? { threadStop: true } : {}),
           ...(input.advertiseServerResolvedCommandContext === false
             ? {}
             : { serverResolvedCommandContext: true }),
-          ...(input.advertiseServerResolvedThreadStop === false
-            ? {}
-            : { serverResolvedThreadStop: true }),
         },
       },
     } as never),
@@ -541,12 +539,7 @@ describe("V2 environment commands", () => {
         },
       };
       const commands: OrchestrationV2Command[] = [];
-      const supervisor = yield* makeSupervisor({
-        commands,
-        projects: [],
-        projection,
-        advertiseServerResolvedThreadStop: false,
-      });
+      const supervisor = yield* makeSupervisor({ commands, projects: [], projection });
 
       yield* interruptThreadTurn({ threadId: v2ThreadId }).pipe(
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
@@ -619,12 +612,7 @@ describe("V2 environment commands", () => {
         ],
       };
       const commands: OrchestrationV2Command[] = [];
-      const supervisor = yield* makeSupervisor({
-        commands,
-        projects: [],
-        projection,
-        advertiseServerResolvedThreadStop: false,
-      });
+      const supervisor = yield* makeSupervisor({ commands, projects: [], projection });
 
       const result = yield* interruptThreadTurn({ threadId: v2ThreadId }).pipe(
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
@@ -730,7 +718,6 @@ describe("V2 environment commands", () => {
             attachments: [{ id: "attachment-kept" }],
           },
         ]);
-        // A text-only edit must not send an attachments replacement list.
         expect(commands[5]).not.toHaveProperty("attachments");
       }).pipe(Effect.provide(layerTestCrypto)),
   );
@@ -1064,7 +1051,7 @@ describe("V2 environment commands", () => {
       }).pipe(Effect.provide(layerTestCrypto)),
   );
 
-  it.effect("sends Stop even when the bounded history contains no pending work", () =>
+  it.effect("stops a thread without relying on background work in the history window", () =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];
       const projectionRequests: ThreadId[] = [];
@@ -1072,11 +1059,11 @@ describe("V2 environment commands", () => {
         commands,
         projects: [],
         projectionRequests,
-        projection: { ...v2Projection, turnItems: [] },
+        advertiseThreadStop: true,
       });
 
       const result = yield* interruptThreadTurn({
-        commandId: CommandId.make("stop-outside-history"),
+        commandId: CommandId.make("stop-outside-history-window"),
         threadId: v2ThreadId,
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
 
@@ -1084,10 +1071,9 @@ describe("V2 environment commands", () => {
       expect(projectionRequests).toEqual([]);
       expect(commands).toEqual([
         {
-          type: "run.interrupt",
-          commandId: "stop-outside-history",
+          type: "thread.stop",
+          commandId: "stop-outside-history-window",
           threadId: v2ThreadId,
-          holdQueue: true,
         },
       ]);
     }).pipe(Effect.provide(layerTestCrypto)),
@@ -1101,6 +1087,7 @@ describe("V2 environment commands", () => {
         commands,
         projects: [],
         projectionRequests,
+        advertiseThreadStop: true,
       });
 
       yield* interruptThreadTurn({

@@ -17,7 +17,7 @@ import type {
   ProjectId,
   ServerProvider,
 } from "@t3tools/contracts";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import * as Equal from "effect/Equal";
 
 import { useProjects } from "~/state/entities";
@@ -173,10 +173,14 @@ function summaryOf(status: ComposerAssistStatus, nowMs: number): ReadonlyArray<s
 
 function ActivityRow({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const ask = useAtomCommand(serverEnvironment.composerAssist, { reportFailure: false });
-  const [status, setStatus] = useState<ComposerAssistStatus | null>(null);
+  // The ages in the summary count to when the status was read; it does not tick.
+  const [status, setStatus] = useState<{
+    readonly status: ComposerAssistStatus;
+    readonly readAtMs: number;
+  } | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const refresh = useCallback(() => {
-    void ask({ environmentId, input: { operation: "status" } }).then((result) => {
+  const refresh = (target: EnvironmentId) => {
+    void ask({ environmentId: target, input: { operation: "status" } }).then((result) => {
       if (result._tag === "Failure") {
         const cause = squashAtomCommandFailure(result);
         setFailure(cause instanceof Error ? cause.message : "Could not read the status.");
@@ -185,19 +189,26 @@ function ActivityRow({ environmentId }: { readonly environmentId: EnvironmentId 
       const answer = composerAssistAnswer(result.value, "status");
       if (answer === null) return;
       setFailure(null);
-      setStatus(answer.status);
+      setStatus({ status: answer.status, readAtMs: Date.now() });
     });
-  }, [ask, environmentId]);
-  useEffect(refresh, [refresh]);
+  };
+  const refreshOnEnvironment = useEffectEvent(refresh);
+  useEffect(() => {
+    refreshOnEnvironment(environmentId);
+  }, [environmentId]);
   const lines =
-    failure !== null ? [failure] : status === null ? ["Reading…"] : summaryOf(status, Date.now());
+    failure !== null
+      ? [failure]
+      : status === null
+        ? ["Reading…"]
+        : summaryOf(status.status, status.readAtMs);
   return (
     <SettingsRow
       {...searchableSetting("composer-assist-activity")}
       title="Activity"
       description="What composer assist has done since this server started."
       control={
-        <Button size="sm" variant="outline" onClick={refresh}>
+        <Button size="sm" variant="outline" onClick={() => refresh(environmentId)}>
           Refresh
         </Button>
       }
@@ -216,13 +227,9 @@ function RulesRow({ environmentId }: { readonly environmentId: EnvironmentId }) 
   const updateSettings = useUpdateScopedSettings();
   const ask = useAtomCommand(serverEnvironment.composerAssist, { reportFailure: false });
   const projects = useProjects();
-  const options = useMemo(
-    () =>
-      projects
-        .filter((project) => project.environmentId === environmentId)
-        .map((project) => ({ value: project.id as string, label: project.title })),
-    [environmentId, projects],
-  );
+  const options = projects
+    .filter((project) => project.environmentId === environmentId)
+    .map((project) => ({ value: project.id as string, label: project.title }));
   const [projectId, setProjectId] = useState<string>("");
   const [rules, setRules] = useState<{
     readonly fileName: string | null;
@@ -230,31 +237,28 @@ function RulesRow({ environmentId }: { readonly environmentId: EnvironmentId }) 
   } | null>(null);
   const [working, setWorking] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const load = useCallback(
-    (project: string, readRules: boolean) => {
-      if (project === "") return;
-      setWorking(true);
-      void ask({
-        environmentId,
-        input: {
-          operation: "status",
-          projectId: project as ProjectId,
-          ...(readRules ? { readRules: true } : {}),
-        },
-      }).then((result) => {
-        setWorking(false);
-        if (result._tag === "Failure") {
-          const cause = squashAtomCommandFailure(result);
-          setFailure(cause instanceof Error ? cause.message : "Could not read the rules.");
-          return;
-        }
-        const answer = composerAssistAnswer(result.value, "status");
-        setFailure(null);
-        setRules(answer?.status.projectRules ?? null);
-      });
-    },
-    [ask, environmentId],
-  );
+  const load = (project: string, readRules: boolean) => {
+    if (project === "") return;
+    setWorking(true);
+    void ask({
+      environmentId,
+      input: {
+        operation: "status",
+        projectId: project as ProjectId,
+        ...(readRules ? { readRules: true } : {}),
+      },
+    }).then((result) => {
+      setWorking(false);
+      if (result._tag === "Failure") {
+        const cause = squashAtomCommandFailure(result);
+        setFailure(cause instanceof Error ? cause.message : "Could not read the rules.");
+        return;
+      }
+      const answer = composerAssistAnswer(result.value, "status");
+      setFailure(null);
+      setRules(answer?.status.projectRules ?? null);
+    });
+  };
   const choose = (project: string) => {
     setProjectId(project);
     setRules(null);

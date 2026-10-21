@@ -65,6 +65,7 @@ describe("local MCP servers for Cursor", () => {
         cwd: "/workspace",
         projectRoot: "/projects/aihub",
       },
+      platform: "linux",
       threadId,
       mcpSession,
     });

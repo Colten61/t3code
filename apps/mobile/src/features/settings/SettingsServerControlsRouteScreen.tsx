@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
 import {
   COMPOSER_ASSIST_LANGUAGES,
@@ -7,8 +8,8 @@ import {
 import { SettingsRow } from "./components/SettingsRow";
 import { AuthSettingsWriteScope } from "@t3tools/contracts";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
-import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
-import { AppText as Text } from "../../components/AppText";
+import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
+import { AppText as Text } from "../../components/ui/AppText";
 import {
   type ResponseStreamingMode,
   type ServerSettings,
@@ -24,19 +25,20 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { RUNTIME_MODE_CHOICES } from "../threads/thread-settings-options";
 import { buildModelOptions } from "../../lib/modelOptions";
-import { serverEnvironment } from "../../state/server";
-import { useAtomCommand } from "../../state/use-atom-command";
+import { environmentPresentations } from "../../state/presentation";
 import { SettingsScreen } from "./components/SettingsScreen";
 import {
   AndroidSettingsEnvironmentFilter,
   SettingsEnvironmentFilterHeader,
 } from "./components/SettingsEnvironmentFilterHeader";
 import { BranchNamingSettings } from "./components/BranchNamingSettings";
+import { DatabaseStorageNotice } from "./components/DatabaseStorageNotice";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
+import { useSettingsWriter } from "./useSettingsWriter";
 import {
   planMobileScopedSettingsClear,
   planMobileScopedSettingsPatch,
@@ -44,6 +46,7 @@ import {
   uniformMobileSetting,
   type ScopedMobileSettingsTarget,
 } from "./settings-scoped-server";
+import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 
 type SettingsPage = "new-threads" | "source-control" | "agent-behavior" | "maintenance";
 
@@ -122,7 +125,6 @@ const SUBMODULE_CHOICES: ReadonlyArray<{
   readonly label: string;
   readonly description: string;
 }> = [
-  // Only offered at environment scope; a project falls back through "Use defaults".
   {
     mode: null,
     label: "Inherit",
@@ -142,7 +144,6 @@ const WORKSPACE_CHOICES: ReadonlyArray<{
   readonly label: string;
   readonly description: string;
 }> = [
-  // Only offered at environment scope; a project falls back through "Use defaults".
   {
     mode: null,
     label: "Inherit",
@@ -206,6 +207,12 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
   );
   const [pendingWrites, setPendingWrites] = useState(0);
   const writeInFlight = useRef(false);
+  // A closing view can still save its drafts while a write is pending, after
+  // the controls disabled. Those patches run once the current write settles.
+  const queuedPatch = useRef<{ key: string; patch: ServerSettingsPatch } | null>(null);
+  const targetsKey = targets
+    .map((target) => `${target.environment.environmentId}:${target.projectId}`)
+    .join(",");
   const [pendingTargets, setPendingTargets] = useState<
     readonly ScopedMobileSettingsTarget[] | null
   >(null);
@@ -229,19 +236,21 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
     targets.every(
       (target) => target.environment.serverConfig.environment.capabilities.composerAssist === true,
     );
+  const providersByEnvironment = useAtomValue(environmentPresentations.providersByEnvironmentAtom);
   const composerAssistSelection =
     reference === null
       ? null
       : composerAssistModelSelection(
           reference.settings.composerAssist,
-          reference.environment.serverConfig.providers,
+          providersByEnvironment.get(reference.environment.environmentId) ?? [],
         );
   const composerAssistModels = useMemo(() => {
     const catalogs = displayTargets.map((target) => {
-      const config = target.environment.serverConfig;
       const supported = {
-        ...config,
-        providers: config.providers.filter((provider) => provider.supportsTextGeneration !== false),
+        ...target.environment.serverConfig,
+        providers: (providersByEnvironment.get(target.environment.environmentId) ?? []).filter(
+          (provider) => provider.supportsTextGeneration !== false,
+        ),
       };
       return new Map(
         buildModelOptions(supported, null, undefined, target.projectId)
@@ -252,7 +261,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
     return [...(catalogs[0]?.values() ?? [])].filter((model) =>
       catalogs.every((catalog) => catalog.get(model.key)?.providerDriver === model.providerDriver),
     );
-  }, [displayTargets]);
+  }, [displayTargets, providersByEnvironment]);
   const renderComposerAssistSwitches = (group: "blanks" | "cues") =>
     COMPOSER_ASSIST_SWITCHES.filter((item) => item.group === group).map((item, index) => (
       <View key={item.key} className={index > 0 ? "border-t border-border-subtle" : undefined}>
@@ -274,13 +283,17 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
   const isMixed = (key: keyof ServerSettings) =>
     reference === null ||
     displayTargets.some((entry) => entry.settings[key] !== reference.settings[key]);
-  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
-    label: "environment settings update",
-    reportFailure: true,
-  });
+  const writeSettings = useSettingsWriter();
   const write = (patch: ServerSettingsPatch) => {
+    if (writeInFlight.current) {
+      const queued = queuedPatch.current;
+      queuedPatch.current = {
+        key: targetsKey,
+        patch: queued?.key === targetsKey ? { ...queued.patch, ...patch } : patch,
+      };
+      return;
+    }
     if (
-      writeInFlight.current ||
       !hasConnectedSelection ||
       !targets.every((target) =>
         readEnvironmentScope(target.environment.environmentId, AuthSettingsWriteScope),
@@ -292,14 +305,15 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
     writeInFlight.current = true;
     setPendingTargets(targets);
     setPendingWrites((count) => count + 1);
-    void Promise.allSettled(
-      writes.map((entry) =>
-        updateSettings({ environmentId: entry.environmentId, input: { patch: entry.patch } }),
-      ),
-    ).finally(() => {
+    void writeSettings(targets, writes).finally(() => {
       writeInFlight.current = false;
       setPendingTargets(null);
       setPendingWrites((count) => count - 1);
+      const queued = queuedPatch.current;
+      queuedPatch.current = null;
+      // These targets may not show this write yet, so send it again with the
+      // queued patch; project overrides are replaced whole.
+      if (queued?.key === targetsKey) write({ ...patch, ...queued.patch });
     });
   };
   const clearProjectOverrides = () => {
@@ -315,12 +329,10 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
     writeInFlight.current = true;
     setPendingTargets(targets);
     setPendingWrites((count) => count + 1);
-    void Promise.allSettled(
-      writes.map((entry) =>
-        updateSettings({ environmentId: entry.environmentId, input: { patch: entry.patch } }),
-      ),
-    ).finally(() => {
+    void writeSettings(targets, writes).finally(() => {
       writeInFlight.current = false;
+      // Resending a draft over these pre-clear targets would undo the clear.
+      queuedPatch.current = null;
       setPendingTargets(null);
       setPendingWrites((count) => count - 1);
     });
@@ -457,9 +469,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
               {props.page === "source-control" ? (
                 <>
                   <BranchNamingSettings
-                    key={targets
-                      .map((target) => `${target.environment.environmentId}:${target.projectId}`)
-                      .join(",")}
+                    key={targetsKey}
                     mode={uniform("branchNamingMode")}
                     prefix={uniform("branchNamePrefix")}
                     instructions={uniform("branchNameInstructions")}
@@ -468,7 +478,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                   />
                   <SettingsSection title="Pull requests">
                     <SettingsSwitchRow
-                      icon="arrow.triangle.merge"
+                      icon={PullRequestGlyph.merged}
                       label="Remove agent credits when merging"
                       subtitle="Remove recognized agent credits from GitHub merge and squash messages, keeping human co-authors. Includes auto-merge. Excludes merge queues, stack merges, and existing commits."
                       value={uniform("removeAgentCreditsOnMerge")}
@@ -489,8 +499,8 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                   <SettingsSection title="Worktrees">
                     <SettingsSwitchRow
                       icon="arrow.triangle.branch"
-                      label="Start from origin"
-                      subtitle="Base new worktrees on the remote branch."
+                      label="Start from remote"
+                      subtitle="Uses the latest commit of the base branch’s tracked remote branch, even if its name differs. Otherwise uses the same-named branch on origin. Uses your local branch if that remote branch is missing."
                       value={uniform("newWorktreesStartFromOrigin")}
                       disabled={disabledFor("newWorktreesStartFromOrigin")}
                       onValueChange={(value) => write({ newWorktreesStartFromOrigin: value })}
@@ -685,6 +695,15 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
 
               {props.page === "maintenance" ? (
                 <>
+                  {!projectSelected &&
+                    selectedTargets
+                      .filter(
+                        (target) =>
+                          target.serverConfig.environment.capabilities.databaseStorage === true,
+                      )
+                      .map((target) => (
+                        <DatabaseStorageNotice key={target.environmentId} target={target} />
+                      ))}
                   {!projectSelected ? (
                     <SettingsSection title="Manage environments">
                       {selectedTargets.map((target) => (
@@ -713,7 +732,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       subtitle={
                         projectSelected
                           ? "Environment-wide setting. Select All projects to change it."
-                          : "Check installed provider CLIs for newer versions."
+                          : "Check installed provider CLIs for newer versions and fetch model catalog updates. When off, new models may not appear."
                       }
                       value={uniform("enableProviderUpdateChecks")}
                       disabled={disabledFor("enableProviderUpdateChecks")}
