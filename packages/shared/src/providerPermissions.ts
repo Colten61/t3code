@@ -3,7 +3,32 @@ import type {
   OrchestrationV2ProviderThread,
   ProviderInstanceId,
   ProviderReportedPermissions,
+  RuntimeMode,
 } from "@t3tools/contracts";
+
+const codexRuntimeModePresentation = {
+  "approval-required": {
+    label: "Read only",
+    description: "Read-only sandbox. Ask before running untrusted commands.",
+  },
+  "auto-accept-edits": {
+    label: "Workspace access",
+    description: "Edit workspace files. Ask before going outside the sandbox.",
+  },
+  auto: {
+    label: "Auto review",
+    description: "Edit workspace files. Let Codex review permission requests.",
+  },
+  "full-access": {
+    label: "Full access",
+    description: "Access files and network without approval prompts.",
+  },
+} satisfies Record<RuntimeMode, { readonly label: string; readonly description: string }>;
+
+/** Codex's sandbox and reviewer choices, named for what its adapter requests. */
+export function runtimeModePresentationForProvider(mode: RuntimeMode, providerDriver: string) {
+  return providerDriver === "codex" ? codexRuntimeModePresentation[mode] : null;
+}
 
 /** A saved report belongs to the active native thread and the selected instance. */
 export function threadReportedPermissions(
@@ -45,14 +70,14 @@ export function describeReportedPermissions(permissions: ProviderReportedPermiss
     };
   }
   const sandbox = {
-    "danger-full-access": "Sandbox off",
-    "workspace-write": "Workspace writes",
-    "read-only": "Read-only files",
+    "danger-full-access": "Full access",
+    "workspace-write": "Workspace access",
+    "read-only": "Read only",
     "external-sandbox": "External sandbox",
   }[permissions.sandbox];
   const policy = permissions.approvalPolicy;
   const promptsOff = policy === "never";
-  const rulesOff = promptsOff || (typeof policy === "object" && !policy.granular.rules);
+  const rulesOff = typeof policy === "object" && !policy.granular.rules;
   const approvals = promptsOff
     ? "prompts off"
     : permissions.approvalsReviewer !== "user"
@@ -64,20 +89,13 @@ export function describeReportedPermissions(permissions: ProviderReportedPermiss
           : policy === "on-failure"
             ? "ask on failure"
             : "ask on request";
-  const network = {
-    enabled: "enabled",
-    restricted: "restricted",
-    "not-reported": "not reported",
-  }[permissions.networkAccess];
-  const approvalDetail =
-    typeof policy === "string"
-      ? `approval policy ${policy}`
-      : Object.entries(policy.granular)
-          .map(([name, enabled]) => `${name.replaceAll("_", " ")} ${enabled ? "on" : "off"}`)
-          .join("; ");
+  const label =
+    permissions.sandbox === "danger-full-access" && promptsOff
+      ? sandbox
+      : `${sandbox} · ${approvals}`;
   return {
-    label: `${sandbox} · ${approvals}`,
-    detail: `Last reported by Codex: ${sandbox}; network ${network}; ${approvalDetail}; reviewer ${permissions.approvalsReviewer}. Command rules and external restrictions still apply.`,
+    label,
+    detail: `Last reported by Codex: ${label}.`,
     approvalNotice: rulesOff
       ? "Commands that require approval under a rule are blocked because rule approvals are disabled."
       : null,

@@ -80,11 +80,11 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
           </>
         ) : null}
         <div className="max-w-80 px-2 py-1.5 text-muted-foreground text-xs">
-          <p>{permissionReport.label}</p>
-          <p>{permissionReport.detail}</p>
+          <p className="font-medium">Permissions for next turn</p>
+          <p>Changes apply when you send the next message.</p>
+          {props.reportedPermissions ? <p>{permissionReport.detail}</p> : null}
           {permissionReport.approvalNotice ? <p>{permissionReport.approvalNotice}</p> : null}
         </div>
-        <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Requested mode</div>
         <MenuRadioGroup
           value={props.runtimeMode}
           onValueChange={(value) => {

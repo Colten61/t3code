@@ -81,16 +81,16 @@ it("does not derive effective access from the full-access preset or a missing re
   expect(description.approvalNotice).toBeNull();
 });
 
-it("explains blocked rule approvals while preserving sandbox and reviewer facts", () => {
+it("does not infer blocked commands from Full access with approval prompts off", () => {
   const description = describeReportedPermissions(permissions);
-  expect(description.label).toBe("Sandbox off · prompts off");
-  expect(description.approvalNotice).toContain("blocked");
+  expect(description.label).toBe("Full access");
+  expect(description.approvalNotice).toBeNull();
   const supervised = describeReportedPermissions({
     ...permissions,
     sandbox: "read-only",
     approvalPolicy: "on-request",
   });
-  expect(supervised.label).toBe("Read-only files · ask on request");
+  expect(supervised.label).toBe("Read only · ask on request");
   expect(supervised.approvalNotice).toBeNull();
   const auto = describeReportedPermissions({
     ...permissions,

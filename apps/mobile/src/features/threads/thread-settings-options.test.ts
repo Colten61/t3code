@@ -29,6 +29,16 @@ describe("selectableChoices", () => {
 });
 
 describe("runtimeModeChoicesForSupportedModes", () => {
+  it("keeps Codex's sandbox names within the provider's supported choices", () => {
+    const supported = ["approval-required", "full-access"] as const;
+    expect(
+      runtimeModeChoicesForSupportedModes(supported, "codex").map((choice) => choice.label),
+    ).toEqual(["Read only", "Full access"]);
+    expect(
+      runtimeModeChoicesForSupportedModes(supported, "claudeAgent").map((choice) => choice.label),
+    ).toEqual(["Supervised", "Full access"]);
+  });
+
   it("keeps controls usable when forward-compatible decoding removes every advertised mode", () => {
     expect(runtimeModeChoicesForSupportedModes([])).toHaveLength(4);
   });

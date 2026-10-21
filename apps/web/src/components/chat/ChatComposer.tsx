@@ -272,7 +272,10 @@ import {
 } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
-import { describeReportedPermissions } from "@t3tools/shared/providerPermissions";
+import {
+  describeReportedPermissions,
+  runtimeModePresentationForProvider,
+} from "@t3tools/shared/providerPermissions";
 import type { ProviderReportedPermissions } from "@t3tools/contracts";
 import { ComposerStatusLine } from "./ComposerStatusLine";
 import { ComposerImageThumbnail } from "./ComposerImageThumbnail";
@@ -1325,20 +1328,19 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
               <ComposerSelectControl
                 data-composer-shortcut="composer.mode"
                 size={size}
-                aria-label={`Requested mode: ${runtimeModeOption.label}. ${permissionReport.label}`}
+                aria-label={`Permissions for next turn: ${runtimeModeOption.label}`}
               />
             }
           >
             <ComposerControlIcon icon={RuntimeModeIcon} size={size} />
-            <SelectValue data-composer-control-label>
-              {runtimeModeOption.label} · {permissionReport.label}
-            </SelectValue>
+            <SelectValue data-composer-control-label>{runtimeModeOption.label}</SelectValue>
           </TooltipTrigger>
           <SelectPopup alignItemWithTrigger={false} {...composerFloatingLayerProps}>
             <div className="max-w-80 px-3 py-2 text-xs text-muted-foreground">
-              <p>{permissionReport.detail}</p>
+              <p className="font-medium">Permissions for next turn</p>
+              <p>Changes apply when you send the next message.</p>
+              {props.reportedPermissions ? <p>{permissionReport.detail}</p> : null}
               {permissionReport.approvalNotice ? <p>{permissionReport.approvalNotice}</p> : null}
-              <p className="mt-2 font-medium">Requested mode</p>
             </div>
             {props.runtimeModeOptions.map((option) => {
               const OptionIcon = option.icon;
@@ -1366,7 +1368,9 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
           </SelectPopup>
         </Select>
         <TooltipPopup side="top">
-          {permissionReport.detail} {permissionReport.approvalNotice}
+          Permissions apply to the next turn.
+          {props.reportedPermissions ? ` ${permissionReport.detail}` : null}
+          {permissionReport.approvalNotice ? ` ${permissionReport.approvalNotice}` : null}
         </TooltipPopup>
       </Tooltip>
 
@@ -2232,10 +2236,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const selectedProvider: ProviderDriverKind =
     selectedProviderEntry?.driverKind ?? requestedDriverKind;
   const supportedRuntimeModes = selectedProviderEntry?.snapshot.supportedRuntimeModes;
-  const compatibleRuntimeModeOptions =
+  const compatibleRuntimeModeOptions = (
     supportedRuntimeModes && supportedRuntimeModes.length > 0
       ? runtimeModeOptions.filter((option) => supportedRuntimeModes.includes(option.mode))
-      : runtimeModeOptions;
+      : runtimeModeOptions
+  ).map((option) => ({
+    ...option,
+    ...runtimeModePresentationForProvider(option.mode, selectedProvider),
+  }));
   // Older threads can contain a mode their current provider no longer offers.
   // Display the provider's first supported mode, which is also its safe legacy
   // fallback, without mutating persisted state until the user makes a choice.

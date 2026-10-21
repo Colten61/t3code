@@ -1,4 +1,5 @@
 import type { ProviderOptionDescriptor, RuntimeMode } from "@t3tools/contracts";
+import { runtimeModePresentationForProvider } from "@t3tools/shared/providerPermissions";
 
 /**
  * Desktop-oriented effort keywords that don't belong in the phone picker.
@@ -39,10 +40,18 @@ export const RUNTIME_MODE_CHOICES: ReadonlyArray<{
 
 export function runtimeModeChoicesForSupportedModes(
   supportedRuntimeModes: ReadonlyArray<RuntimeMode> | undefined,
+  providerDriver?: string,
 ) {
-  return supportedRuntimeModes && supportedRuntimeModes.length > 0
-    ? RUNTIME_MODE_CHOICES.filter((choice) => supportedRuntimeModes.includes(choice.mode))
-    : RUNTIME_MODE_CHOICES;
+  const choices =
+    supportedRuntimeModes && supportedRuntimeModes.length > 0
+      ? RUNTIME_MODE_CHOICES.filter((choice) => supportedRuntimeModes.includes(choice.mode))
+      : RUNTIME_MODE_CHOICES;
+  return providerDriver === undefined
+    ? choices
+    : choices.map((choice) => ({
+        ...choice,
+        ...runtimeModePresentationForProvider(choice.mode, providerDriver),
+      }));
 }
 
 export function compatibleRuntimeModeForChoices(

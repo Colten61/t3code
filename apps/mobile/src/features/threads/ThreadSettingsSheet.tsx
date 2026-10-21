@@ -550,6 +550,7 @@ function ThreadSettingsSessionProvider(
   );
   const runtimeModeChoices = runtimeModeChoicesForSupportedModes(
     displayedModel?.supportedRuntimeModes,
+    displayedModel?.providerDriver,
   );
   const compatibleRuntimeMode = compatibleRuntimeModeForChoices(
     props.runtimeMode,
@@ -967,7 +968,7 @@ function ThreadSettingsOptionsItem(props: {
         <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
           <DisclosureRow
             isLast
-            label="Requested mode"
+            label="Permissions for next turn"
             value={
               session.runtimeModeChoices.find((choice) => choice.mode === session.runtimeMode)
                 ?.label
@@ -975,7 +976,12 @@ function ThreadSettingsOptionsItem(props: {
             onPress={() => props.onOpenSubmenu({ kind: "runtime" })}
           />
           <View className="px-5 pb-3">
-            <Text className="text-xs text-foreground-muted">{permissionReport.detail}</Text>
+            <Text className="text-xs text-foreground-muted">
+              Changes apply when you send the next message.
+            </Text>
+            {session.reportedPermissions ? (
+              <Text className="text-xs text-foreground-muted">{permissionReport.detail}</Text>
+            ) : null}
             {permissionReport.approvalNotice ? (
               <Text className="text-xs text-foreground-muted">
                 {permissionReport.approvalNotice}
@@ -1432,7 +1438,7 @@ function ThreadSettingsModelsScreen() {
           onOpenSubmenu={(submenu) => {
             const title =
               submenu.kind === "runtime"
-                ? "Runtime"
+                ? "Permissions"
                 : (session.displayedDescriptors.find(
                     (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
                   )?.label ?? "Option");
