@@ -267,7 +267,9 @@ export function TaskAgentsDialog(props: {
                   ? "This environment's server does not support orchestrators yet. Update the server to use them."
                   : orchestrator
                     ? "One thread gets the cards and starts a writer for each of them."
-                    : "Each card starts in its own thread in the project's checkout, with the card's prompt."}
+                    : cards.length === 1
+                      ? "The card starts in its own thread in the project's checkout, with its prompt."
+                      : "Each card starts in its own thread in the project's checkout, with the card's prompt."}
               </p>
             </div>
             {cards.length > 1 && (orchestrator || queueSupported) ? (

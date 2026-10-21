@@ -8162,16 +8162,6 @@ export default function ChatView(props: ChatViewProps) {
             if (shouldUsePlanSidebarSheet) closePreviewPanelStable();
             focusComposerStable();
           }}
-          onOpenFile={(snapshot, card) => {
-            if (!card.origin_only)
-              useRightPanelStore
-                .getState()
-                .openFile(
-                  activeThreadRef,
-                  `${snapshot.root.replace(/[/\\]+$/, "")}/${card.path}`,
-                  card.line,
-                );
-          }}
           onExpand={
             !queuedRunEdit.isEditing
               ? () => {
