@@ -131,8 +131,10 @@ it.effect("FORK: a parent stopped while idle resumes its session on a child's re
                     offers.push(message);
                   }),
                 setModel: () => Effect.void,
+                applyFlagSettings: () => Effect.void,
                 setPermissionMode: () => Effect.void,
                 stopTask: () => Effect.void,
+                backgroundTasks: () => Effect.succeed(false),
                 interrupt: Effect.void,
                 close: Effect.sync(() => {
                   process.closed = true;
@@ -296,7 +298,7 @@ it.effect("FORK: a parent stopped while idle resumes its session on a child's re
         const wake = offers[1]!.message.content;
         assert.include(
           typeof wake === "string" ? wake : JSON.stringify(wake),
-          "Use task_status with taskId idle-stop-child",
+          "Delegated task idle-stop-child (Review) [completed]",
         );
         const delivered = yield* watch(
           (event) =>

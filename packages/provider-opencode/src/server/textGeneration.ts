@@ -186,7 +186,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
           directory: input.cwd,
           ...(server.serverPassword !== undefined ? { serverPassword: server.serverPassword } : {}),
         });
-        let answered = false;
+        // FORK: composer assist runs a session per pause in typing, so each one is deleted after.
         const session = yield* Effect.acquireRelease(
           Effect.tryPromise({
             try: (signal) =>
@@ -207,16 +207,9 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
           (created) => {
             if (!created.data) return Effect.void;
             const sessionID = created.data.id;
-            const stop = answered
-              ? Effect.void
-              : Effect.tryPromise((signal) => client.session.abort({ sessionID }, { signal })).pipe(
-                  Effect.timeout("5 seconds"),
-                  Effect.ignore,
-                );
-            const remove = Effect.tryPromise((signal) =>
+            return Effect.tryPromise((signal) =>
               client.session.delete({ sessionID }, { signal }),
             ).pipe(Effect.timeout("5 seconds"), Effect.ignore);
-            return stop.pipe(Effect.andThen(remove));
           },
           { interruptible: true },
         );
@@ -253,8 +246,24 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
               ...promptContext,
               cause,
             }),
-        });
-        answered = true;
+        }).pipe(
+          // Disconnecting the HTTP request does not stop work in a shared or external server.
+          Effect.onInterrupt(() =>
+            OpenCodeRuntime.runOpenCodeSdk("session.abort", (signal) =>
+              client.session.abort({ sessionID: session.data.id }, { signal }),
+            ).pipe(
+              Effect.interruptible,
+              Effect.timeout("10 seconds"),
+              Effect.catch(() =>
+                Effect.logWarning(
+                  "Failed to stop cancelled OpenCode text generation.",
+                  promptContext,
+                ),
+              ),
+              Effect.asVoid,
+            ),
+          ),
+        );
         const promptFailure = getOpenCodePromptFailure(result.data?.info?.error);
         if (promptFailure) {
           return yield* new OpenCodeTextGenerationPromptResponseError({

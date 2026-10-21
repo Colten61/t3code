@@ -92,18 +92,15 @@ export interface UnsettleThreadInput extends ThreadCommandInput {
 }
 
 export interface PinThreadInput extends ThreadCommandInput {
-  /** Initial slot in the user-arranged pinned order; omit to pin keyless. */
   readonly orderKey?: string;
 }
 export type UnpinThreadInput = ThreadCommandInput;
 
 export interface ReorderPinnedThreadInput extends ThreadCommandInput {
-  /** Fractional-index key that sorts between the drop position's neighbors. */
   readonly orderKey: string;
 }
 
 export interface ReorderActiveThreadInput extends ThreadCommandInput {
-  /** Fractional-index key that sorts between the drop position's neighbors. */
   readonly orderKey: string;
 }
 
@@ -123,7 +120,6 @@ export interface ShelveThreadInput extends ThreadCommandInput {
 export type UnshelveThreadInput = ThreadCommandInput;
 
 export interface VisitThreadInput extends ThreadCommandInput {
-  /** Watermark of the thread state the viewer has seen (ISO timestamp). */
   readonly visitedAt: string;
 }
 
@@ -135,11 +131,8 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly modelSelection?: ModelSelection;
   readonly branch?: string | null;
   readonly worktreePath?: string | null;
-  /** Kick off an async title regeneration for the thread. */
   readonly regenerateTitle?: boolean;
-  /** Link (object) or unlink (null) a pull request (#8160). */
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
-  /** Apply only while no message or run has landed on the thread. */
   readonly expectedEmpty?: boolean;
 }
 
@@ -165,7 +158,6 @@ interface StartThreadBootstrap {
     readonly instructions?: string;
   };
   readonly prepareWorktree?: {
-    /** V2 worktree launches always fail rather than falling back to the project checkout. */
     readonly requireWorktree?: boolean;
     readonly projectCwd: string;
     readonly baseBranch: string;
@@ -196,7 +188,6 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
   readonly runId?: RunId;
   readonly subagentId?: NodeId;
-  /** Temporary caller compatibility while UI naming moves from turns to runs. */
   readonly turnId?: string;
 }
 
@@ -260,9 +251,7 @@ export interface EditQueuedRunInput extends ThreadCommandInput {
   readonly text: string;
   /**
    * Full replacement attachment list for the queued message. Omitted =
-   * text-only edit that leaves attachments untouched. `dataUrl` entries are
-   * persisted against `messageId` (the queued run's user message) before
-   * dispatch, so `messageId` is required whenever attachments are present.
+   * text-only edit that leaves attachments untouched.
    */
   readonly edit?: {
     readonly messageId: MessageId;
@@ -276,7 +265,7 @@ const allocateCommandId = Effect.fn("EnvironmentCommands.allocateCommandId")(fun
 ) {
   if (input.commandId !== undefined) return input.commandId;
   const crypto = yield* Crypto.Crypto;
-  return CommandId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
+  return CommandId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
 });
 
 const dispatch = (command: OrchestrationV2Command) =>
@@ -830,15 +819,16 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
   let runId = input.runId ?? (input.turnId as RunId | undefined);
   if (runId === undefined) {
     const config = yield* getInitialServerConfig();
-    if (config.environment.capabilities.serverResolvedThreadStop === true) {
+    if (config.environment.capabilities.threadStop === true) {
+      // A paginated projection can omit commands still running from earlier turns.
       return yield* dispatch({
-        type: "run.interrupt",
+        type: "thread.stop",
         commandId: yield* allocateCommandId(input),
         threadId: input.threadId,
-        holdQueue: true,
       });
     }
-    // Older servers require a concrete run and cannot resolve Stop themselves.
+  }
+  if (runId === undefined) {
     const projection = yield* getProjection(input.threadId);
     runId = projection.runs.findLast(
       (run) =>
@@ -878,6 +868,7 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
       return result;
     }
   }
+  if (runId === undefined) return { sequence: 0 };
   return yield* dispatch({
     type: "run.interrupt",
     commandId: yield* allocateCommandId(input),

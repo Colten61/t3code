@@ -1,5 +1,5 @@
 import { Minimize2Icon, TimerIcon } from "lucide-react";
-import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
+import { memo, useEffect, useState, type ReactNode } from "react";
 
 import type { ContextWindowSnapshot } from "~/lib/contextWindow";
 import { cn } from "~/lib/utils";
@@ -116,27 +116,15 @@ export const ComposerStatusLine = memo(function ComposerStatusLine(props: {
     return () => clearInterval(id);
   }, [countingDown]);
 
-  const line = useMemo(
-    () =>
-      deriveStatusLine({
-        enabled,
-        driverKind,
-        contextWindow,
-        compactionCount,
-        turnRunning,
-        lastTurnCompletedAtMs,
-        nowMs,
-      }),
-    [
-      enabled,
-      driverKind,
-      contextWindow,
-      compactionCount,
-      turnRunning,
-      lastTurnCompletedAtMs,
-      nowMs,
-    ],
-  );
+  const line = deriveStatusLine({
+    enabled,
+    driverKind,
+    contextWindow,
+    compactionCount,
+    turnRunning,
+    lastTurnCompletedAtMs,
+    nowMs,
+  });
   if (line === null) return null;
 
   const { context, cache, compactions } = line;

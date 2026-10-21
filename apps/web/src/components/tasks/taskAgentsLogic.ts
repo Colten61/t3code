@@ -1,4 +1,4 @@
-// FORK: start agents for TODO board cards, one thread per card or one orchestrator for them all.
+// FORK: start agents for task board cards, one thread per card or one orchestrator for them all.
 import type { TodoBoardCard } from "@t3tools/contracts";
 
 import { taskPrompt } from "./taskBoardLogic";

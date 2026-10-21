@@ -250,62 +250,60 @@ export const make = Effect.gen(function* () {
    * One distillation per key at a time, run outside the request: a request the client drops
    * (a newer pause replaces it) does not throw the work away for the next one.
    */
-  const once = (
+  const once = Effect.fn("ComposerAssistService.once")(function* (
     key: string,
     compute: Effect.Effect<ReadonlyArray<string>, ComposerAssistError>,
-  ): Effect.Effect<ReadonlyArray<string>> =>
-    Effect.gen(function* () {
-      const failed = failedAtMs.get(key);
-      const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-      if (failed !== undefined && nowMs - failed < FAILED_DISTILL_BACKOFF_MS) return [];
-      let pending = inflight.get(key);
-      if (pending === undefined) {
-        const created = yield* Deferred.make<ReadonlyArray<string>>();
-        inflight.set(key, created);
-        yield* compute.pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning("Composer assist could not distil its context.", { cause }).pipe(
-              Effect.andThen(Effect.sync(() => failedAtMs.set(key, nowMs))),
-              Effect.as([] as ReadonlyArray<string>),
-            ),
+  ): Effect.fn.Return<ReadonlyArray<string>> {
+    const failed = failedAtMs.get(key);
+    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+    if (failed !== undefined && nowMs - failed < FAILED_DISTILL_BACKOFF_MS) return [];
+    let pending = inflight.get(key);
+    if (pending === undefined) {
+      const created = yield* Deferred.make<ReadonlyArray<string>>();
+      inflight.set(key, created);
+      yield* compute.pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Composer assist could not distil its context.", { cause }).pipe(
+            Effect.andThen(Effect.sync(() => failedAtMs.set(key, nowMs))),
+            Effect.as([] as ReadonlyArray<string>),
           ),
-          Effect.flatMap((value) => Deferred.succeed(created, value)),
-          Effect.ensuring(Effect.sync(() => inflight.delete(key))),
-          Effect.forkIn(scope),
-        );
-        pending = created;
-      }
-      return yield* Deferred.await(pending);
-    });
+        ),
+        Effect.flatMap((value) => Deferred.succeed(created, value)),
+        Effect.ensuring(Effect.sync(() => inflight.delete(key))),
+        Effect.forkIn(scope),
+      );
+      pending = created;
+    }
+    return yield* Deferred.await(pending);
+  });
 
   /** Counts a request that asked the model, for the status in Settings. A dropped one is not counted. */
-  const timed = <A>(
+  const timed = Effect.fn("ComposerAssistService.timed")(function* <A>(
     operation: "blank" | "cues",
     effect: Effect.Effect<A, ComposerAssistError>,
-  ): Effect.Effect<A, ComposerAssistError> =>
-    Effect.gen(function* () {
-      const startedMs = yield* Clock.currentTimeMillis;
-      const record = (detail: string | undefined) =>
-        Effect.gen(function* () {
-          const nowMs = yield* Clock.currentTimeMillis;
-          counts[operation].requests += 1;
-          if (detail !== undefined) counts[operation].failures += 1;
-          recent = [
-            {
-              operation,
-              ok: detail === undefined,
-              durationMs: nowMs - startedMs,
-              at: DateTime.formatIso(DateTime.makeUnsafe(nowMs)),
-              ...(detail === undefined ? {} : { detail }),
-            },
-            ...recent,
-          ].slice(0, MAX_RECENT_ACTIVITY);
-        });
-      return yield* effect.pipe(
-        Effect.tap(() => record(undefined)),
-        Effect.tapError((error) => record(error.detail)),
-      );
+  ): Effect.fn.Return<A, ComposerAssistError> {
+    const startedMs = yield* Clock.currentTimeMillis;
+    // Untraced: it only counts, inside the span of `timed`.
+    const record = Effect.fnUntraced(function* (detail: string | undefined) {
+      const nowMs = yield* Clock.currentTimeMillis;
+      counts[operation].requests += 1;
+      if (detail !== undefined) counts[operation].failures += 1;
+      recent = [
+        {
+          operation,
+          ok: detail === undefined,
+          durationMs: nowMs - startedMs,
+          at: DateTime.formatIso(DateTime.makeUnsafe(nowMs)),
+          ...(detail === undefined ? {} : { detail }),
+        },
+        ...recent,
+      ].slice(0, MAX_RECENT_ACTIVITY);
     });
+    return yield* effect.pipe(
+      Effect.tap(() => record(undefined)),
+      Effect.tapError((error) => record(error.detail)),
+    );
+  });
 
   const settingsOf = serverSettings.getSettings.pipe(
     Effect.map((settings) => settings.composerAssist),
@@ -324,8 +322,8 @@ export const make = Effect.gen(function* () {
       : threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
 
   /** The thread's newest messages, oldest first: what the user and the agent said, no tool output. */
-  const threadMessages = (threadId: ThreadId) =>
-    Effect.gen(function* () {
+  const threadMessages = Effect.fn("ComposerAssistService.threadMessages")(
+    function* (threadId: ThreadId) {
       const head = yield* projections.getTimelinePage(threadId, { view: "messages", limit: 0 });
       const page = yield* projections.getTimelinePage(threadId, {
         view: "messages",
@@ -343,43 +341,46 @@ export const make = Effect.gen(function* () {
         }
       }
       return messages;
-    }).pipe(Effect.orElseSucceed((): ReadonlyArray<ThreadMessage> => []));
+    },
+    Effect.orElseSucceed((): ReadonlyArray<ThreadMessage> => []),
+  );
 
-  const assistantFor = (
+  const assistantFor = Effect.fn("ComposerAssistService.assistantFor")(function* (
     input: ComposerAssistRequest,
     settings: ComposerAssistSettings,
     operation: "blank" | "cues",
-  ) =>
-    Effect.gen(function* () {
-      const shell = yield* threadShell(input.threadId);
-      const chosen = pickComposerAssistInstance(
-        yield* assistInstances,
-        settings.instanceId,
-        input.instanceId ?? shell?.modelSelection.instanceId,
-      );
-      if (chosen === null) {
-        return yield* new ComposerAssistError({
-          operation,
-          detail:
-            settings.instanceId.length > 0
-              ? `The provider "${settings.instanceId}" chosen for composer assist is not available.`
-              : "Composer assist needs a text generation provider.",
-        });
-      }
-      const model = yield* modelFor(chosen, settings);
-      return { assistant: assistantOf(chosen, settings), model, shell };
-    });
+  ) {
+    const shell = yield* threadShell(input.threadId);
+    const chosen = pickComposerAssistInstance(
+      yield* assistInstances,
+      settings.instanceId,
+      input.instanceId ?? shell?.modelSelection.instanceId,
+    );
+    if (chosen === null) {
+      return yield* new ComposerAssistError({
+        operation,
+        detail:
+          settings.instanceId.length > 0
+            ? `The provider "${settings.instanceId}" chosen for composer assist is not available.`
+            : "Composer assist needs a text generation provider.",
+      });
+    }
+    const model = yield* modelFor(chosen, settings);
+    return { assistant: assistantOf(chosen, settings), model, shell };
+  });
 
-  const modelFor = (instance: ProviderInstance, settings: ComposerAssistSettings) =>
-    Effect.gen(function* () {
-      if (settings.model !== "" || instance.composerAssist !== undefined) return modelOf(settings);
-      const snapshot = yield* instance.snapshot.getSnapshot;
-      return (
-        snapshot.models.find((model) => model.isDefault)?.slug ??
-        snapshot.models[0]?.slug ??
-        "default"
-      );
-    });
+  const modelFor = Effect.fn("ComposerAssistService.modelFor")(function* (
+    instance: ProviderInstance,
+    settings: ComposerAssistSettings,
+  ) {
+    if (settings.model !== "" || instance.composerAssist !== undefined) return modelOf(settings);
+    const snapshot = yield* instance.snapshot.getSnapshot;
+    return (
+      snapshot.models.find((model) => model.isDefault)?.slug ??
+      snapshot.models[0]?.slug ??
+      "default"
+    );
+  });
 
   const assistantOf = (
     instance: ProviderInstance,
@@ -393,8 +394,8 @@ export const make = Effect.gen(function* () {
       return instance.composerAssist;
     }
     return {
-      complete: ({ system, task, timeoutMs, model }) =>
-        Effect.gen(function* () {
+      complete: Effect.fn("ComposerAssistService.completeWithInstance")(
+        function* ({ system, task, model }) {
           const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-composer-assist-" });
           return yield* instance.textGeneration.generateComposerAssist({
             cwd,
@@ -406,29 +407,34 @@ export const make = Effect.gen(function* () {
               options: settings.options,
             },
           });
-        }).pipe(
-          Effect.scoped,
-          Effect.mapError(
-            (cause) =>
-              new ProviderComposerAssistError({
-                detail:
-                  cause._tag === "TextGenerationError"
-                    ? cause.detail
-                    : "Could not prepare composer assist.",
-                cause,
+        },
+        (effect, { timeoutMs }) =>
+          effect.pipe(
+            Effect.scoped,
+            Effect.mapError(
+              (cause) =>
+                new ProviderComposerAssistError({
+                  detail:
+                    cause._tag === "TextGenerationError"
+                      ? cause.detail
+                      : "Could not prepare composer assist.",
+                  cause,
+                }),
+            ),
+            Effect.timeoutOption(timeoutMs),
+            Effect.flatMap(
+              Option.match({
+                onSome: Effect.succeed,
+                onNone: () =>
+                  Effect.fail(
+                    new ProviderComposerAssistError({
+                      detail: "Composer assist request timed out.",
+                    }),
+                  ),
               }),
+            ),
           ),
-          Effect.timeoutOption(timeoutMs),
-          Effect.flatMap(
-            Option.match({
-              onSome: Effect.succeed,
-              onNone: () =>
-                Effect.fail(
-                  new ProviderComposerAssistError({ detail: "Composer assist request timed out." }),
-                ),
-            }),
-          ),
-        ),
+      ),
       roomForBackground:
         instance.composerAssist?.roomForBackground ??
         Effect.gen(function* () {
@@ -456,125 +462,126 @@ export const make = Effect.gen(function* () {
         Effect.mapError((cause) => new ComposerAssistError({ operation, detail: cause.detail })),
       );
 
-  const decisionsFor = (
+  const decisionsFor = Effect.fn("ComposerAssistService.decisionsFor")(function* (
     assistant: ProviderComposerAssist,
     model: string,
     threadId: ThreadId,
     runId: string | null,
-  ) =>
-    Effect.gen(function* () {
-      const cached = decisionsByThread.get(threadId);
-      if (cached !== undefined && cached.runId === runId) return cached.decisions;
-      const refresh = once(
-        `decisions:${threadId}:${runId ?? "none"}`,
-        Effect.gen(function* () {
-          const transcript = renderTranscript(yield* threadMessages(threadId));
-          const decisions =
-            transcript.length === 0
-              ? []
-              : parseListReply(
-                  yield* complete(
-                    assistant,
-                    decisionsTask(transcript),
-                    DISTILL_TIMEOUT_MS,
-                    "cues",
-                    model,
-                  ),
-                  "decisions",
-                  12,
-                );
-          decisionsByThread.delete(threadId);
-          decisionsByThread.set(threadId, { runId, decisions });
-          if (decisionsByThread.size > MAX_CACHED_THREADS) {
-            const oldest = decisionsByThread.keys().next().value;
-            if (oldest !== undefined) decisionsByThread.delete(oldest);
-          }
-          return decisions;
-        }),
-      );
-      // Decisions from an earlier turn serve until the new ones are ready.
-      if (cached !== undefined) {
-        yield* refresh.pipe(Effect.forkIn(scope));
-        return cached.decisions;
-      }
-      return yield* refresh;
-    });
+  ) {
+    const cached = decisionsByThread.get(threadId);
+    if (cached !== undefined && cached.runId === runId) return cached.decisions;
+    const refresh = once(
+      `decisions:${threadId}:${runId ?? "none"}`,
+      Effect.gen(function* () {
+        const transcript = renderTranscript(yield* threadMessages(threadId));
+        const decisions =
+          transcript.length === 0
+            ? []
+            : parseListReply(
+                yield* complete(
+                  assistant,
+                  decisionsTask(transcript),
+                  DISTILL_TIMEOUT_MS,
+                  "cues",
+                  model,
+                ),
+                "decisions",
+                12,
+              );
+        decisionsByThread.delete(threadId);
+        decisionsByThread.set(threadId, { runId, decisions });
+        if (decisionsByThread.size > MAX_CACHED_THREADS) {
+          const oldest = decisionsByThread.keys().next().value;
+          if (oldest !== undefined) decisionsByThread.delete(oldest);
+        }
+        return decisions;
+      }),
+    );
+    // Decisions from an earlier turn serve until the new ones are ready.
+    if (cached !== undefined) {
+      yield* refresh.pipe(Effect.forkIn(scope));
+      return cached.decisions;
+    }
+    return yield* refresh;
+  });
 
   /** The rules file cues use: AGENTS.md, else CLAUDE.md, and which version of it this is. */
-  const rulesFile = (root: string) =>
-    Effect.gen(function* () {
-      for (const fileName of RULE_FILES) {
-        const filePath = path.join(root, fileName);
-        const content = yield* fs.readFileString(filePath).pipe(Effect.option);
-        if (Option.isNone(content) || content.value.trim().length === 0) continue;
-        return {
-          fileName,
-          filePath,
-          content: content.value,
-          key: `${filePath}:${contentHash(content.value)}`,
-        };
-      }
-      return null;
-    });
+  const rulesFile = Effect.fn("ComposerAssistService.rulesFile")(function* (root: string) {
+    for (const fileName of RULE_FILES) {
+      const filePath = path.join(root, fileName);
+      const content = yield* fs.readFileString(filePath).pipe(Effect.option);
+      if (Option.isNone(content) || content.value.trim().length === 0) continue;
+      return {
+        fileName,
+        filePath,
+        content: content.value,
+        key: `${filePath}:${contentHash(content.value)}`,
+      };
+    }
+    return null;
+  });
 
   /**
    * The rules in a project's rules file. An older version's rules serve while the new ones are
    * worked out, unless `wait`: then a changed file is read before this returns.
    */
-  const rulesFor = (assistant: ProviderComposerAssist, model: string, root: string, wait = false) =>
-    Effect.gen(function* () {
-      const file = yield* rulesFile(root);
-      if (file === null) return { fileName: null, rules: [] as ReadonlyArray<string> };
-      const { fileName, filePath, content, key } = file;
-      const known = rulesByKey.get(key);
-      if (known !== undefined) {
+  const rulesFor = Effect.fn("ComposerAssistService.rulesFor")(function* (
+    assistant: ProviderComposerAssist,
+    model: string,
+    root: string,
+    wait = false,
+  ) {
+    const file = yield* rulesFile(root);
+    if (file === null) return { fileName: null, rules: [] as ReadonlyArray<string> };
+    const { fileName, filePath, content, key } = file;
+    const known = rulesByKey.get(key);
+    if (known !== undefined) {
+      latestRulesKey.set(filePath, key);
+      return { fileName, rules: known };
+    }
+    const staleKey = latestRulesKey.get(filePath);
+    const stale = staleKey === undefined ? undefined : rulesByKey.get(staleKey);
+    const refresh = once(
+      `rules:${key}`,
+      Effect.gen(function* () {
+        const rules = parseListReply(
+          yield* complete(
+            assistant,
+            rulesTask({ fileName, content: content.slice(0, RULES_SOURCE_CHARS) }),
+            DISTILL_TIMEOUT_MS,
+            "cues",
+            model,
+          ),
+          "rules",
+          24,
+        );
+        if (staleKey !== undefined) rulesByKey.delete(staleKey);
+        rulesByKey.set(key, rules);
         latestRulesKey.set(filePath, key);
-        return { fileName, rules: known };
-      }
-      const staleKey = latestRulesKey.get(filePath);
-      const stale = staleKey === undefined ? undefined : rulesByKey.get(staleKey);
-      const refresh = once(
-        `rules:${key}`,
-        Effect.gen(function* () {
-          const rules = parseListReply(
-            yield* complete(
-              assistant,
-              rulesTask({ fileName, content: content.slice(0, RULES_SOURCE_CHARS) }),
-              DISTILL_TIMEOUT_MS,
-              "cues",
-              model,
-            ),
-            "rules",
-            24,
-          );
-          if (staleKey !== undefined) rulesByKey.delete(staleKey);
-          rulesByKey.set(key, rules);
-          latestRulesKey.set(filePath, key);
-          yield* persistRules;
-          return rules;
-        }),
-      );
-      if (stale !== undefined && !wait) {
-        yield* refresh.pipe(Effect.forkIn(scope));
-        return { fileName, rules: stale };
-      }
-      return { fileName, rules: yield* refresh };
-    });
+        yield* persistRules;
+        return rules;
+      }),
+    );
+    if (stale !== undefined && !wait) {
+      yield* refresh.pipe(Effect.forkIn(scope));
+      return { fileName, rules: stale };
+    }
+    return { fileName, rules: yield* refresh };
+  });
 
-  const projectRoot = (
+  const projectRoot = Effect.fn("ComposerAssistService.projectRoot")(function* (
     shell: {
       readonly worktreePath: string | null;
       readonly projectId: ComposerAssistRequest["projectId"];
     } | null,
     projectId: ComposerAssistRequest["projectId"],
-  ) =>
-    Effect.gen(function* () {
-      if (shell?.worktreePath) return shell.worktreePath;
-      const id = shell?.projectId ?? projectId;
-      if (id === undefined) return null;
-      const project = yield* projects.get(id).pipe(Effect.orElseSucceed(() => Option.none()));
-      return Option.isSome(project) ? project.value.workspaceRoot : null;
-    });
+  ) {
+    if (shell?.worktreePath) return shell.worktreePath;
+    const id = shell?.projectId ?? projectId;
+    if (id === undefined) return null;
+    const project = yield* projects.get(id).pipe(Effect.orElseSucceed(() => Option.none()));
+    return Option.isSome(project) ? project.value.workspaceRoot : null;
+  });
 
   const blank: ComposerAssistService["Service"]["blank"] = Effect.fn("ComposerAssistService.blank")(
     function* (input) {
@@ -684,29 +691,30 @@ export const make = Effect.gen(function* () {
   );
 
   /** The rules cues use for a project: the known ones, or, when asked to, freshly read ones. */
-  const projectRules = (input: ComposerAssistStatusRequest & { readonly projectId: ProjectId }) =>
-    Effect.gen(function* () {
-      const settings = yield* settingsOf;
-      const root = yield* projectRoot(null, input.projectId);
-      const file = root === null ? null : yield* rulesFile(root);
-      if (root === null || file === null) return { fileName: null, rules: [] };
-      const known = rulesByKey.get(file.key);
-      if (known !== undefined) return { fileName: file.fileName, rules: known };
-      if (input.readRules !== true) {
-        const staleKey = latestRulesKey.get(file.filePath);
-        return {
-          fileName: file.fileName,
-          rules: staleKey === undefined ? null : (rulesByKey.get(staleKey) ?? null),
-        };
-      }
-      const { assistant, model } = yield* assistantFor(
-        { projectId: input.projectId, text: "" },
-        settings,
-        "cues",
-      );
-      const read = yield* rulesFor(assistant, model, root, true);
-      return { fileName: read.fileName, rules: read.rules };
-    });
+  const projectRules = Effect.fn("ComposerAssistService.projectRules")(function* (
+    input: ComposerAssistStatusRequest & { readonly projectId: ProjectId },
+  ) {
+    const settings = yield* settingsOf;
+    const root = yield* projectRoot(null, input.projectId);
+    const file = root === null ? null : yield* rulesFile(root);
+    if (root === null || file === null) return { fileName: null, rules: [] };
+    const known = rulesByKey.get(file.key);
+    if (known !== undefined) return { fileName: file.fileName, rules: known };
+    if (input.readRules !== true) {
+      const staleKey = latestRulesKey.get(file.filePath);
+      return {
+        fileName: file.fileName,
+        rules: staleKey === undefined ? null : (rulesByKey.get(staleKey) ?? null),
+      };
+    }
+    const { assistant, model } = yield* assistantFor(
+      { projectId: input.projectId, text: "" },
+      settings,
+      "cues",
+    );
+    const read = yield* rulesFor(assistant, model, root, true);
+    return { fileName: read.fileName, rules: read.rules };
+  });
 
   const status: ComposerAssistService["Service"]["status"] = Effect.fn(
     "ComposerAssistService.status",

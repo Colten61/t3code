@@ -1,4 +1,4 @@
-// FORK: start agents for the cards picked on the TODO board.
+// FORK: start agents for the cards picked on the task board.
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { ModelSelection, ThreadId, TodoBoardCard } from "@t3tools/contracts";
@@ -13,7 +13,7 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Schema from "effect/Schema";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { newMessageId, newThreadId } from "~/lib/utils";
@@ -87,24 +87,17 @@ export function TaskAgentsDialog(props: {
     reportFailure: false,
   });
 
-  const instanceEntries = useMemo(
-    () =>
-      sortProviderInstanceEntries(
-        applyProviderInstanceSettings(
-          deriveProviderInstanceEntries(providers),
-          settings,
-          project.id,
-        ),
-      ),
-    [providers, settings, project.id],
+  const instanceEntries = sortProviderInstanceEntries(
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, project.id),
   );
   const [chosen, setChosen] = useState<ModelSelection | null>(null);
   const selection = chosen ?? scheduledTaskDefaultModel(settings, project, instanceEntries);
   const activeEntry = instanceEntries.find((entry) => entry.instanceId === selection?.instanceId);
-  const modelOptionsByInstance = useMemo(
-    () =>
-      getCustomModelOptionsByInstance(settings, providers, selection?.instanceId, selection?.model),
-    [settings, providers, selection?.instanceId, selection?.model],
+  const modelOptionsByInstance = getCustomModelOptionsByInstance(
+    settings,
+    providers,
+    selection?.instanceId,
+    selection?.model,
   );
   const projectDefaults = resolveProjectSettings(settings, project.id, project).settings;
 

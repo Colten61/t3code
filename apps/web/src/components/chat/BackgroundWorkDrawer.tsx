@@ -3,10 +3,8 @@ import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { CheckIcon, ChevronDownIcon, CircleDotIcon } from "lucide-react";
 import {
   type RefObject,
-  useCallback,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -84,16 +82,13 @@ export function useBackgroundWorkHistory(input: {
       }),
     );
   }, [key, latestRunId, running, settled]);
-  const markRead = useCallback(
-    (taskId: string) => {
-      if (key === null) return;
-      const current = histories.get(key);
-      if (current !== undefined) {
-        setHistory(key, markBackgroundWorkRead(current, latestRunId, [taskId]));
-      }
-    },
-    [key, latestRunId],
-  );
+  const markRead = (taskId: string) => {
+    if (key === null) return;
+    const current = histories.get(key);
+    if (current !== undefined) {
+      setHistory(key, markBackgroundWorkRead(current, latestRunId, [taskId]));
+    }
+  };
   return { finished: history?.finished ?? NO_FINISHED, markRead };
 }
 
@@ -236,10 +231,7 @@ function BackgroundWorkRow({
 }) {
   const titleRef = useRef<HTMLSpanElement>(null);
   const { taskId } = entry;
-  const readThis = useMemo(
-    () => (onRead === undefined ? null : () => onRead(taskId)),
-    [onRead, taskId],
-  );
+  const readThis = onRead === undefined ? null : () => onRead(taskId);
   useReadWhenShown(titleRef, readThis);
   const statusRef = useRef<HTMLSpanElement>(null);
   // Ticks through DOM writes, as the subagent bar does, so the chat view
@@ -347,13 +339,13 @@ export function BackgroundWorkDrawer({
   readonly onRead: (taskId: string) => void;
 }) {
   const [openOutputIds, setOpenOutputIds] = useState<ReadonlySet<string>>(() => new Set());
-  const toggleOutput = useCallback((taskId: string) => {
+  const toggleOutput = (taskId: string) => {
     setOpenOutputIds((current) => {
       const next = new Set(current);
       if (!next.delete(taskId)) next.add(taskId);
       return next;
     });
-  }, []);
+  };
 
   const row = (
     entry: BackgroundWorkEntry,

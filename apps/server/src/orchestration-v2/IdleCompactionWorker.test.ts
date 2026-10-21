@@ -3,9 +3,11 @@ import {
   ProviderInstanceId,
   RunId,
   ThreadId,
+  type OrchestrationV2ContextTransfer,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2ServerCommand,
+  type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
@@ -17,16 +19,17 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { ProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
 import {
-  IDLE_COMPACTION_AFTER_MS,
-  IDLE_COMPACTION_LATE_MS,
+  IDLE_COMPACTION_LEAD_MS,
   idleCompactionCandidate,
   idleCompactionContextSkip,
   idleCompactionThreadSkip,
+  idleCompactionWindow,
   latestIdleCompactionContext,
   makeIdleCompactionWorker,
   type IdleCompactionCandidate,
   type IdleCompactionThread,
 } from "./IdleCompactionWorker.ts";
+import { idleCompactionMayStart } from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
@@ -66,13 +69,29 @@ const idleThread: IdleCompactionThread = {
   snoozedUntil: null,
 } as unknown as IdleCompactionThread;
 
-const report = (usedTokens: number, updatedAtMs: number, promptCacheTtlMs?: number) => ({
+/** A report on the request sent at `requestedAtMs`, with the cache it wrote, if any. */
+const report = (usedTokens: number, requestedAtMs: number, promptCacheTtlMs?: number) => ({
   tokenUsage: {
     usedTokens,
-    updatedAt: DateTime.formatIso(DateTime.makeUnsafe(updatedAtMs)),
-    ...(promptCacheTtlMs === undefined ? {} : { promptCacheTtlMs }),
+    requestedAt: DateTime.formatIso(DateTime.makeUnsafe(requestedAtMs)),
+    updatedAt: DateTime.formatIso(DateTime.makeUnsafe(requestedAtMs)),
+    ...(promptCacheTtlMs === undefined
+      ? {}
+      : {
+          promptCacheTtlMs,
+          promptCacheExpiresAt: DateTime.formatIso(
+            DateTime.makeUnsafe(requestedAtMs + promptCacheTtlMs),
+          ),
+        }),
   },
 });
+
+const pendingMergeBack = {
+  type: "merge_back",
+  sourceThreadId: ThreadId.make("child"),
+  targetThreadId: threadId,
+  status: "pending",
+} as OrchestrationV2ContextTransfer;
 
 describe("idle compaction decisions", () => {
   it("makes a thread due when a run leaves it idle, never after a failure or its own compaction", () => {
@@ -85,12 +104,15 @@ describe("idle compaction decisions", () => {
   });
 
   it("leaves a thread alone unless it still sits idle where it was", () => {
-    const skip = (thread: Partial<IdleCompactionThread>, nowMs = IDLE_COMPACTION_AFTER_MS) =>
-      idleCompactionThreadSkip({ candidate, thread: { ...idleThread, ...thread }, nowMs });
+    const skip = (thread: Partial<IdleCompactionThread>) =>
+      idleCompactionThreadSkip({
+        candidate,
+        thread: { ...idleThread, ...thread },
+        nowMs: HOUR_MS - IDLE_COMPACTION_LEAD_MS,
+      });
     assert.isNull(skip({}));
     // Shelved threads are compacted: the user comes back to them later.
     assert.isNull(skip({ shelvedAt: DateTime.makeUnsafe(0) } as Partial<IdleCompactionThread>));
-    assert.equal(skip({}, IDLE_COMPACTION_LATE_MS + 1), "late");
     assert.equal(skip({ archivedAt: DateTime.makeUnsafe(0) }), "archived");
     assert.equal(skip({ settledOverride: "settled" }), "settled");
     assert.equal(skip({ settledAt: DateTime.makeUnsafe(0) }), "settled");
@@ -118,36 +140,78 @@ describe("idle compaction decisions", () => {
     );
   });
 
-  it("reads the size from the latest report and the cache lifetime from the latest that wrote one", () => {
+  it("times the compaction by the cache the latest request wrote", () => {
     assert.isNull(latestIdleCompactionContext([{}]));
-    assert.deepEqual(
-      latestIdleCompactionContext([report(100_000, 1, HOUR_MS), report(320_000, 3), {}]),
-      { usedTokens: 320_000, promptCacheTtlMs: HOUR_MS },
-    );
-    assert.deepEqual(latestIdleCompactionContext([report(320_000, 3)]), {
+    const context = latestIdleCompactionContext([
+      report(100_000, 1, HOUR_MS),
+      report(320_000, 3, HOUR_MS),
+      {},
+    ]);
+    assert.deepEqual(context, {
       usedTokens: 320_000,
-      promptCacheTtlMs: null,
+      promptCacheTtlMs: HOUR_MS,
+      promptCacheExpiresAtMs: 3 + HOUR_MS,
     });
+    assert.deepEqual(idleCompactionWindow(context), {
+      startMs: 3 + HOUR_MS - IDLE_COMPACTION_LEAD_MS,
+      endMs: 3 + HOUR_MS,
+    });
+    assert.isNull(idleCompactionWindow(latestIdleCompactionContext([report(320_000, 3, 300_000)])));
   });
 
-  it("compacts only a one-hour cache holding at least the instance's threshold", () => {
+  it("dates a fully cached request's cache from its own start and the latest lifetime written", () => {
+    // Served wholly from the cache, the latest request wrote nothing but restarted the hour.
+    const refreshed = latestIdleCompactionContext([
+      report(100_000, 1, HOUR_MS),
+      report(200_000, 2),
+      report(320_000, 3),
+    ]);
+    assert.deepEqual(refreshed, {
+      usedTokens: 320_000,
+      promptCacheTtlMs: HOUR_MS,
+      promptCacheExpiresAtMs: 3 + HOUR_MS,
+    });
+    assert.deepEqual(idleCompactionWindow(refreshed), {
+      startMs: 3 + HOUR_MS - IDLE_COMPACTION_LEAD_MS,
+      endMs: 3 + HOUR_MS,
+    });
+    // A five-minute cache stays left alone, and a request without its start dates nothing.
+    assert.isNull(
+      idleCompactionWindow(
+        latestIdleCompactionContext([report(100_000, 1, 300_000), report(320_000, 3)]),
+      ),
+    );
+    const { requestedAt: _requestedAt, ...undated } = report(320_000, 3).tokenUsage;
+    assert.isNull(
+      idleCompactionWindow(
+        latestIdleCompactionContext([report(100_000, 1, HOUR_MS), { tokenUsage: undated }]),
+      ),
+    );
+  });
+
+  it("compacts only a live one-hour cache holding at least the instance's threshold", () => {
     const policy = { minTokens: 200_000 };
-    const context = { usedTokens: 320_000, promptCacheTtlMs: HOUR_MS };
-    assert.isNull(idleCompactionContextSkip({ policy, context }));
-    assert.equal(idleCompactionContextSkip({ policy: null, context }), "provider_off");
-    assert.equal(idleCompactionContextSkip({ policy, context: null }), "no_context");
-    assert.equal(
-      idleCompactionContextSkip({ policy, context: { ...context, promptCacheTtlMs: 300_000 } }),
-      "short_cache",
-    );
-    assert.equal(
-      idleCompactionContextSkip({ policy, context: { ...context, promptCacheTtlMs: null } }),
-      "short_cache",
-    );
-    assert.equal(
-      idleCompactionContextSkip({ policy, context: { ...context, usedTokens: 150_000 } }),
-      "small",
-    );
+    const context = {
+      usedTokens: 320_000,
+      promptCacheTtlMs: HOUR_MS,
+      promptCacheExpiresAtMs: HOUR_MS,
+    };
+    const skip = (input: Partial<Parameters<typeof idleCompactionContextSkip>[0]>) =>
+      idleCompactionContextSkip({
+        policy,
+        context,
+        mergeBackPending: false,
+        nowMs: HOUR_MS - IDLE_COMPACTION_LEAD_MS,
+        ...input,
+      });
+    assert.isNull(skip({}));
+    assert.equal(skip({ policy: null }), "provider_off");
+    assert.equal(skip({ context: null }), "no_context");
+    assert.equal(skip({ context: { ...context, promptCacheTtlMs: 300_000 } }), "short_cache");
+    assert.equal(skip({ context: { ...context, promptCacheExpiresAtMs: null } }), "short_cache");
+    assert.equal(skip({ nowMs: HOUR_MS }), "late");
+    assert.equal(skip({ mergeBackPending: true }), "merge_back");
+    assert.equal(skip({ context: { ...context, usedTokens: 150_000 } }), "small");
   });
 });
 
@@ -155,6 +219,9 @@ const makeHarness = Effect.gen(function* () {
   const dispatched: Array<OrchestrationV2ServerCommand> = [];
   const shell = yield* Ref.make<OrchestrationV2ThreadShell | null>(null);
   const lastVisitedAt = yield* Ref.make<DateTime.Utc | null>(null);
+  // The run's last request went out five minutes before it completed at 0.
+  const requestedAtMs = yield* Ref.make(-5 * 60_000);
+  const contextTransfers = yield* Ref.make<ReadonlyArray<OrchestrationV2ContextTransfer>>([]);
   const layer = Layer.mergeAll(
     Layer.mock(ThreadManagement.ThreadManagementService)({
       getThreadShell: () => Ref.get(shell),
@@ -177,18 +244,16 @@ const makeHarness = Effect.gen(function* () {
           ReturnType<ProjectionStore.ProjectionStoreV2Shape["getShellSnapshot"]>
         >),
       getThreadRecords: (_threadId, fields) =>
-        Ref.get(lastVisitedAt).pipe(
-          Effect.map(
-            (visitedAt) =>
-              ({
-                thread: { lastVisitedAt: visitedAt },
-                providerTurns: fields.includes("providerTurns" as never)
-                  ? [report(320_000, 0, HOUR_MS)]
-                  : [],
-                runs: [run()],
-              }) as never,
-          ),
-        ),
+        Effect.gen(function* () {
+          return {
+            thread: { lastVisitedAt: yield* Ref.get(lastVisitedAt) },
+            providerTurns: fields.includes("providerTurns" as never)
+              ? [report(320_000, yield* Ref.get(requestedAtMs), HOUR_MS)]
+              : [],
+            contextTransfers: yield* Ref.get(contextTransfers),
+            runs: [run()],
+          } as never;
+        }),
     }),
     Layer.succeed(
       ProviderInstanceRegistry,
@@ -201,8 +266,18 @@ const makeHarness = Effect.gen(function* () {
     ),
   );
   const worker = yield* makeIdleCompactionWorker.pipe(Effect.provide(layer));
-  return { worker, dispatched, shell, lastVisitedAt };
+  return { worker, dispatched, shell, lastVisitedAt, contextTransfers };
 });
+
+/** Due two minutes before the cache of the run's last request, sent at -5 minutes, expires. */
+const DUE_MS = -5 * 60_000 + HOUR_MS - IDLE_COMPACTION_LEAD_MS;
+
+const setIdleShell = (harness: Effect.Success<typeof makeHarness>) =>
+  Ref.set(harness.shell, {
+    ...idleThread,
+    id: threadId,
+    providerInstanceId: modelSelection.instanceId,
+  } as unknown as OrchestrationV2ThreadShell);
 
 const runEvent = (
   type: "run.created" | "run.updated",
@@ -211,17 +286,13 @@ const runEvent = (
   ({ type, threadId: payload.threadId, payload }) as unknown as OrchestrationV2DomainEvent;
 
 describe("IdleCompactionWorker", () => {
-  it.effect("compacts a thread 50 minutes after its turn and keeps it seen", () =>
+  it.effect("compacts a thread two minutes before its cache expires and keeps it seen", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness;
-      yield* Ref.set(harness.shell, {
-        ...idleThread,
-        id: threadId,
-        providerInstanceId: modelSelection.instanceId,
-      } as unknown as OrchestrationV2ThreadShell);
+      yield* setIdleShell(harness);
       yield* harness.worker.onEvent(runEvent("run.updated", run()));
 
-      yield* TestClock.adjust(IDLE_COMPACTION_AFTER_MS - 60_000);
+      yield* TestClock.adjust(DUE_MS - 60_000);
       yield* harness.worker.runDueWork;
       assert.lengthOf(harness.dispatched, 0);
 
@@ -241,7 +312,7 @@ describe("IdleCompactionWorker", () => {
 
       // The user had seen the thread before it went idle, so the compaction stays seen.
       yield* Ref.set(harness.lastVisitedAt, DateTime.makeUnsafe(1));
-      const compactedAt = DateTime.makeUnsafe(IDLE_COMPACTION_AFTER_MS + 90_000);
+      const compactedAt = DateTime.makeUnsafe(DUE_MS + 90_000);
       yield* harness.worker.onEvent(
         runEvent(
           "run.updated",
@@ -264,9 +335,47 @@ describe("IdleCompactionWorker", () => {
       const harness = yield* makeHarness;
       yield* harness.worker.onEvent(runEvent("run.updated", run()));
       yield* harness.worker.onEvent(runEvent("run.created", run({ id: RunId.make("run-2") })));
-      yield* TestClock.adjust(IDLE_COMPACTION_AFTER_MS);
+      yield* TestClock.adjust(DUE_MS);
       yield* harness.worker.runDueWork;
       assert.lengthOf(harness.dispatched, 0);
+    }),
+  );
+
+  it.effect("leaves a thread with a pending merge-back to the user's next message", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      yield* setIdleShell(harness);
+      yield* Ref.set(harness.contextTransfers, [pendingMergeBack]);
+      yield* harness.worker.onEvent(runEvent("run.updated", run()));
+      yield* TestClock.adjust(DUE_MS);
+      yield* harness.worker.runDueWork;
+      assert.lengthOf(harness.dispatched, 0);
+
+      // The orchestrator's own check before the /compact starts holds it back as well.
+      const mayStart = (contextTransfers: ReadonlyArray<OrchestrationV2ContextTransfer>) =>
+        idleCompactionMayStart({
+          projection: {
+            thread: { id: threadId, archivedAt: null, deletedAt: null, settledAt: null },
+            runs: [run()],
+            runtimeRequests: [],
+            contextTransfers,
+          } as unknown as Pick<
+            OrchestrationV2ThreadProjection,
+            "thread" | "runs" | "runtimeRequests" | "contextTransfers"
+          >,
+          command: {
+            createdBy: "system",
+            creationSource: "server",
+            text: "/compact",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+          },
+          runId,
+          nowMs: DUE_MS,
+        });
+      assert.isTrue(mayStart([]));
+      assert.isFalse(mayStart([pendingMergeBack]));
+      assert.isTrue(mayStart([{ ...pendingMergeBack, status: "consumed" }]));
     }),
   );
 
@@ -281,7 +390,7 @@ describe("IdleCompactionWorker", () => {
           run({
             id: RunId.make("run-compact"),
             idleCompactionOfRunId: runId,
-            completedAt: DateTime.makeUnsafe(IDLE_COMPACTION_AFTER_MS),
+            completedAt: DateTime.makeUnsafe(DUE_MS),
           }),
         ),
       );

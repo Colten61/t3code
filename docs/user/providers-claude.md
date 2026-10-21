@@ -57,15 +57,15 @@ history for that message. The cache lasts about an hour on a Claude
 subscription and 5 minutes with an API key, Bedrock, or Vertex. See [commands and skills](./composer.md#commands-and-skills) for using
 composer commands.
 
-T3 Code also compacts a thread you left before its cache expires, so coming back
-to it does not re-read the whole history. About 50 minutes after a turn ends, a
-thread holding at least 200,000 tokens is compacted and shows **Context
-compacted while idle**. It stays where it was in the sidebar or on the shelf.
-Settled, archived and snoozed threads, delegated tasks, and threads on a
-5-minute cache are left alone, and nothing is compacted near a usage limit. Turn
-it off with **Compact idle threads** in the Claude provider settings, or change
-the threshold with **Compact idle threads from**. `"idleCompaction": false` in
-the config directory's `settings.json` turns it off too.
+T3 Code also compacts a thread you left shortly before its one-hour cache
+expires, so coming back to it does not re-read the whole history. A thread
+holding at least 200,000 tokens is compacted and shows **Context compacted while
+idle**. It stays where it was in the sidebar or on the shelf. Settled, archived
+and snoozed threads, delegated tasks, and threads on a 5-minute cache are left
+alone, and nothing is compacted near a usage limit. Turn it off with **Compact
+idle threads** in the Claude provider settings, or change the threshold with
+**Compact idle threads from**. `"idleCompaction": false` in the config
+directory's `settings.json` turns it off too.
 
 ## Usage limits
 
@@ -81,10 +81,18 @@ Claude skills come from the config directory's `skills` folder and the project's
 `.claude/skills` folder. If both define the same name, the config-directory copy
 wins. Skills disabled in Claude's settings do not appear in the composer.
 
-Use `$` in the composer to select a skill. Skills marked `disable-model-invocation`
+Use `$` in the composer to select a skill. Enabled installed Claude plugins also
+contribute skills under names such as `plugin:review`. Skills marked `disable-model-invocation`
 can still be started by you. Invoke those one per message: Claude directly runs
 only the last named skill and may try to start earlier ones through its Skill
 tool, which refuses skills reserved for manual invocation.
+
+## Task lists
+
+To show Claude task lists in the web and desktop apps, add
+`CLAUDE_CODE_ENABLE_TODO_TOOLS=1` under **Variables** in the Claude instance's
+**Environment** section in **Settings > Providers**. Unfinished tasks stay visible
+between turns in the same Claude session.
 
 ## OpenRouter
 

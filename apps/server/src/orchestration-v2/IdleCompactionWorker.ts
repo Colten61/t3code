@@ -1,9 +1,9 @@
 /**
- * FORK: compacts a Claude thread left idle before its one-hour prompt cache expires, so the next
- * message does not re-read all of its context uncached. Claude Code does this itself only in a
- * terminal, never for an SDK session like T3's, and it fires 54 minutes into the cache's own clock.
- * T3 sees the end of the turn instead, and may first resume a session the idle stop released, so it
- * compacts 50 minutes after the turn. After 56 the cache may be gone, and compacting would cost as
+ * FORK: compacts a Claude thread left idle shortly before its one-hour prompt cache expires, so the
+ * next message does not re-read all of its context uncached. Claude Code does this itself only in a
+ * terminal, never for an SDK session like T3's. The cache's clock starts with Claude's latest
+ * request, and T3 may first resume a session the idle stop released, so it starts the compaction
+ * two minutes before that request's cache expires. Once the cache is gone, compacting would cost as
  * much as the message it saves.
  */
 import {
@@ -30,8 +30,8 @@ import { forkParked } from "../serverActivation.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
-export const IDLE_COMPACTION_AFTER_MS = 50 * 60_000;
-export const IDLE_COMPACTION_LATE_MS = 56 * 60_000;
+/** How long before the cache expires the compaction starts. */
+export const IDLE_COMPACTION_LEAD_MS = 2 * 60_000;
 /** The cache lifetime the timing is built for; a thread caching for less is left alone. */
 const ONE_HOUR_MS = 60 * 60_000;
 
@@ -55,6 +55,8 @@ export interface IdleCompactionCandidate {
   readonly runId: RunId;
   readonly completedAtMs: number;
   readonly modelSelection: OrchestrationV2Run["modelSelection"];
+  /** When the compaction is due, once the thread's cache expiry has been read. */
+  readonly dueAtMs?: number;
 }
 
 export function idleCompactionCandidate(
@@ -100,7 +102,6 @@ export function idleCompactionThreadSkip(input: {
   readonly nowMs: number;
 }): string | null {
   const { candidate, thread } = input;
-  if (input.nowMs > candidate.completedAtMs + IDLE_COMPACTION_LATE_MS) return "late";
   if (thread.archivedAt !== null) return "archived";
   if (thread.settledOverride === "settled" || thread.settledAt !== null) return "settled";
   // A delegated task's thread is almost never continued (1 in 22 in mp's data).
@@ -128,10 +129,11 @@ export function idleCompactionThreadSkip(input: {
   return null;
 }
 
-/** The provider's latest report on a thread's context, and the cache lifetime it last wrote. */
+/** The provider's latest report on a thread's context, and when the cache it used expires. */
 export interface IdleCompactionContext {
   readonly usedTokens: number;
   readonly promptCacheTtlMs: number | null;
+  readonly promptCacheExpiresAtMs: number | null;
 }
 
 export function latestIdleCompactionContext(
@@ -142,22 +144,53 @@ export function latestIdleCompactionContext(
     .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
   const latest = reports[0];
   if (latest === undefined) return null;
-  // A response that wrote nothing to the cache reports no lifetime; an earlier one did.
+  // A request served wholly from the cache writes nothing and reports no lifetime or expiry, yet
+  // its hit restarts the lifetime the latest write reported, from the request's own start.
   const ttl = reports.find((report) => report.promptCacheTtlMs !== undefined)?.promptCacheTtlMs;
-  return { usedTokens: latest.usedTokens, promptCacheTtlMs: ttl ?? null };
+  const expiresAtMs =
+    latest.promptCacheExpiresAt !== undefined
+      ? Date.parse(latest.promptCacheExpiresAt)
+      : latest.requestedAt !== undefined && ttl !== undefined
+        ? Date.parse(latest.requestedAt) + ttl
+        : Number.NaN;
+  return {
+    usedTokens: latest.usedTokens,
+    promptCacheTtlMs: ttl ?? null,
+    promptCacheExpiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : null,
+  };
+}
+
+/** When the compaction starts and when the cache is gone, or null without a known one-hour cache. */
+export function idleCompactionWindow(
+  context: IdleCompactionContext | null,
+): { readonly startMs: number; readonly endMs: number } | null {
+  if (context === null) return null;
+  const endMs = context.promptCacheExpiresAtMs;
+  // Five-minute caches (API key, extra usage) are left alone.
+  if (
+    endMs === null ||
+    context.promptCacheTtlMs === null ||
+    context.promptCacheTtlMs < ONE_HOUR_MS
+  ) {
+    return null;
+  }
+  return { startMs: endMs - IDLE_COMPACTION_LEAD_MS, endMs };
 }
 
 /** Why a due, idle thread is still left alone once its provider and context are known. */
 export function idleCompactionContextSkip(input: {
   readonly policy: ProviderIdleCompaction | null;
   readonly context: IdleCompactionContext | null;
+  /** A merge-back waiting for the next message; the /compact turn would swallow it. */
+  readonly mergeBackPending: boolean;
+  readonly nowMs: number;
 }): string | null {
   if (input.policy === null) return "provider_off";
   if (input.context === null) return "no_context";
-  // Five-minute caches (API key, extra usage) are long gone by now.
-  if (input.context.promptCacheTtlMs === null || input.context.promptCacheTtlMs < ONE_HOUR_MS) {
-    return "short_cache";
-  }
+  const window = idleCompactionWindow(input.context);
+  if (window === null) return "short_cache";
+  if (input.nowMs >= window.endMs) return "late";
+  if (input.mergeBackPending) return "merge_back";
   if (input.context.usedTokens < input.policy.minTokens) return "small";
   return null;
 }
@@ -188,7 +221,8 @@ export const makeIdleCompactionWorker = Effect.gen(function* () {
         continue;
       }
       const completedAtMs = DateTime.toEpochMillis(thread.latestRunCompletedAt);
-      if (nowMs > completedAtMs + IDLE_COMPACTION_LATE_MS) continue;
+      // The cache expires at most an hour after the run's last request, which preceded its end.
+      if (nowMs >= completedAtMs + ONE_HOUR_MS) continue;
       due.set(thread.id, {
         threadId: thread.id,
         runId: thread.latestRunId,
@@ -198,73 +232,86 @@ export const makeIdleCompactionWorker = Effect.gen(function* () {
     }
   });
 
-  const compact = (candidate: IdleCompactionCandidate, nowMs: number) =>
-    Effect.gen(function* () {
-      const thread = yield* threads.getThreadShell(candidate.threadId);
-      if (thread === null) return;
-      const threadSkip = idleCompactionThreadSkip({ candidate, thread, nowMs });
-      if (threadSkip !== null) return;
-      const instance = yield* registry.getInstance(thread.providerInstanceId);
-      const policy = instance?.idleCompaction === undefined ? null : yield* instance.idleCompaction;
-      const records = yield* projections.getThreadRecords(candidate.threadId, ["providerTurns"]);
-      const context = latestIdleCompactionContext(records.providerTurns);
-      const skip = idleCompactionContextSkip({ policy, context });
-      if (skip !== null) {
-        if (skip !== "provider_off") {
-          yield* Effect.logDebug("orchestration-v2.idle-compaction.skipped", {
-            threadId: candidate.threadId,
-            reason: skip,
-          });
-        }
-        return;
+  const compact = Effect.fn("IdleCompactionWorker.compact")(function* (
+    candidate: IdleCompactionCandidate,
+    nowMs: number,
+  ) {
+    const thread = yield* threads.getThreadShell(candidate.threadId);
+    if (thread === null) return;
+    const threadSkip = idleCompactionThreadSkip({ candidate, thread, nowMs });
+    if (threadSkip !== null) return;
+    const instance = yield* registry.getInstance(thread.providerInstanceId);
+    const policy = instance?.idleCompaction === undefined ? null : yield* instance.idleCompaction;
+    const records = yield* projections.getThreadRecords(candidate.threadId, [
+      "providerTurns",
+      "contextTransfers",
+    ]);
+    const context = latestIdleCompactionContext(records.providerTurns);
+    const mergeBackPending = records.contextTransfers.some(
+      (transfer) =>
+        transfer.type === "merge_back" &&
+        transfer.targetThreadId === candidate.threadId &&
+        transfer.status === "pending",
+    );
+    const skip = idleCompactionContextSkip({ policy, context, mergeBackPending, nowMs });
+    if (skip !== null) {
+      if (skip !== "provider_off") {
+        yield* Effect.logDebug("orchestration-v2.idle-compaction.skipped", {
+          threadId: candidate.threadId,
+          reason: skip,
+        });
       }
-      const id = `idle-compact:${candidate.threadId}:${candidate.runId}`;
-      yield* threads.dispatch({
-        type: "message.dispatch",
-        commandId: CommandId.make(id),
-        messageId: MessageId.make(id),
-        threadId: candidate.threadId,
-        idleCompactionOfRunId: candidate.runId,
-        text: "/compact",
-        attachments: [],
-        dispatchMode: { type: "start_immediately" },
-        createdBy: "system",
-        creationSource: "server",
-      });
-      yield* Effect.logInfo("orchestration-v2.idle-compaction.started", {
-        threadId: candidate.threadId,
-        contextTokens: context?.usedTokens,
-      });
+      return;
+    }
+    const id = `idle-compact:${candidate.threadId}:${candidate.runId}`;
+    yield* threads.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make(id),
+      messageId: MessageId.make(id),
+      threadId: candidate.threadId,
+      idleCompactionOfRunId: candidate.runId,
+      text: "/compact",
+      attachments: [],
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "system",
+      creationSource: "server",
     });
+    yield* Effect.logInfo("orchestration-v2.idle-compaction.started", {
+      threadId: candidate.threadId,
+      contextTokens: context?.usedTokens,
+    });
+  });
 
   /**
    * A thread the user had seen before it went idle stays seen: the compaction's run would
    * otherwise show as an unseen completion on every client.
    */
-  const keepSeen = (run: OrchestrationV2Run, previousRunId: RunId) =>
-    Effect.gen(function* () {
-      if (run.completedAt === null) return;
-      const records = yield* projections.getThreadRecords(run.threadId, ["runs"], {
-        runIds: [previousRunId],
-      });
-      const previousCompletedAt = records.runs.find(
-        (candidate) => candidate.id === previousRunId,
-      )?.completedAt;
-      const visitedAt = records.thread.lastVisitedAt;
-      if (
-        previousCompletedAt == null ||
-        visitedAt === null ||
-        DateTime.toEpochMillis(visitedAt) < DateTime.toEpochMillis(previousCompletedAt)
-      ) {
-        return;
-      }
-      yield* threads.dispatch({
-        type: "thread.visit",
-        commandId: CommandId.make(`idle-compact-seen:${run.threadId}:${run.id}`),
-        threadId: run.threadId,
-        visitedAt: DateTime.formatIso(run.completedAt),
-      });
+  const keepSeen = Effect.fn("IdleCompactionWorker.keepSeen")(function* (
+    run: OrchestrationV2Run,
+    previousRunId: RunId,
+  ) {
+    if (run.completedAt === null) return;
+    const records = yield* projections.getThreadRecords(run.threadId, ["runs"], {
+      runIds: [previousRunId],
     });
+    const previousCompletedAt = records.runs.find(
+      (candidate) => candidate.id === previousRunId,
+    )?.completedAt;
+    const visitedAt = records.thread.lastVisitedAt;
+    if (
+      previousCompletedAt == null ||
+      visitedAt === null ||
+      DateTime.toEpochMillis(visitedAt) < DateTime.toEpochMillis(previousCompletedAt)
+    ) {
+      return;
+    }
+    yield* threads.dispatch({
+      type: "thread.visit",
+      commandId: CommandId.make(`idle-compact-seen:${run.threadId}:${run.id}`),
+      threadId: run.threadId,
+      visitedAt: DateTime.formatIso(run.completedAt),
+    });
+  });
 
   const onEvent = (event: OrchestrationV2DomainEvent): Effect.Effect<void> => {
     switch (event.type) {
@@ -299,15 +346,47 @@ export const makeIdleCompactionWorker = Effect.gen(function* () {
     }
   };
 
+  /** When a newly idle thread's compaction is due, or null when it never will be. */
+  const readDueAt = Effect.fn("IdleCompactionWorker.readDueAt")(function* (
+    candidate: IdleCompactionCandidate,
+  ) {
+    // Only drivers that compact idle threads pay for reading the thread's turns.
+    const instance = yield* registry.getInstance(candidate.modelSelection.instanceId);
+    if (instance?.idleCompaction === undefined) return null;
+    const records = yield* projections.getThreadRecords(candidate.threadId, ["providerTurns"]);
+    return (
+      idleCompactionWindow(latestIdleCompactionContext(records.providerTurns))?.startMs ?? null
+    );
+  });
+
   const runDueWork = Effect.gen(function* () {
     if (!seeded) {
       yield* seed;
       seeded = true;
     }
     const nowMs = yield* Clock.currentTimeMillis;
-    // Deleting the entry being visited, or adding one, is safe while a Map iterates.
+    // Deleting the entry being visited, or adding or replacing one, is safe while a Map iterates.
     for (const candidate of due.values()) {
-      if (nowMs < candidate.completedAtMs + IDLE_COMPACTION_AFTER_MS) continue;
+      let dueAtMs = candidate.dueAtMs;
+      if (dueAtMs === undefined) {
+        const read = yield* readDueAt(candidate).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("orchestration-v2.idle-compaction.failed", {
+              threadId: candidate.threadId,
+              cause,
+            }).pipe(Effect.as(null)),
+          ),
+        );
+        // A run event may have replaced or dropped the thread meanwhile.
+        if (due.get(candidate.threadId) !== candidate) continue;
+        if (read === null) {
+          due.delete(candidate.threadId);
+          continue;
+        }
+        dueAtMs = read;
+        due.set(candidate.threadId, { ...candidate, dueAtMs });
+      }
+      if (nowMs < dueAtMs) continue;
       due.delete(candidate.threadId);
       yield* compact(candidate, nowMs).pipe(
         Effect.catchCause((cause) =>

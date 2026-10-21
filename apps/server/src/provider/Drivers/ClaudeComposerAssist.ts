@@ -145,8 +145,8 @@ export const makeClaudeComposerAssist = Effect.fn("makeClaudeComposerAssist")(fu
   const fail = (detail: string, cause?: unknown) =>
     new ProviderComposerAssistError({ detail, ...(cause === undefined ? {} : { cause }) });
 
-  const start = (system: string, model: string) =>
-    Effect.gen(function* () {
+  const start = Effect.fn("ClaudeComposerAssist.start")(
+    function* (system: string, model: string) {
       const scope = yield* Scope.fork(instanceScope);
       const stdin = yield* Queue.unbounded<Uint8Array, Cause.Done>();
       const reply = yield* Deferred.make<string, ProviderComposerAssistError>();
@@ -210,7 +210,9 @@ export const makeClaudeComposerAssist = Effect.fn("makeClaudeComposerAssist")(fu
         reply,
         startedAtMs: yield* Clock.currentTimeMillis,
       } satisfies StartedClaude;
-    }).pipe(Effect.mapError((cause) => fail("Could not start Claude for composer assist.", cause)));
+    },
+    Effect.mapError((cause) => fail("Could not start Claude for composer assist.", cause)),
+  );
 
   const stop = (process: StartedClaude) => Scope.close(process.scope, Exit.void);
 
@@ -234,13 +236,8 @@ export const makeClaudeComposerAssist = Effect.fn("makeClaudeComposerAssist")(fu
       }),
     );
 
-  const complete: ProviderComposerAssist["complete"] = ({
-    system,
-    task,
-    timeoutMs,
-    model = COMPOSER_ASSIST_MODEL,
-  }) =>
-    Effect.gen(function* () {
+  const complete: ProviderComposerAssist["complete"] = Effect.fn("ClaudeComposerAssist.complete")(
+    function* ({ system, task, timeoutMs, model = COMPOSER_ASSIST_MODEL }) {
       const process = yield* take(system, model);
       return yield* Effect.gen(function* () {
         yield* Queue.offer(
@@ -255,7 +252,8 @@ export const makeClaudeComposerAssist = Effect.fn("makeClaudeComposerAssist")(fu
           }),
         );
       }).pipe(Effect.ensuring(stop(process)));
-    });
+    },
+  );
 
   // A process started ahead and never used is stopped once it has waited too long.
   yield* Effect.gen(function* () {

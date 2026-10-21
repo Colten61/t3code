@@ -244,11 +244,6 @@ function normalizeReplayFrame(value: unknown): unknown {
   return normalized;
 }
 
-/**
- * `config` keys a recorder sent on thread requests that the client under test
- * never sends, such as `agents.max_depth`. Recorders list them in the
- * transcript header as `metadata.recorderThreadConfigKeys`.
- */
 function recorderThreadConfigKeys(transcript: CodexAppServerReplayTranscript): ReadonlySet<string> {
   const keys = transcript.metadata?.recorderThreadConfigKeys;
   return new Set(Array.isArray(keys) ? keys.filter((key) => typeof key === "string") : []);
@@ -258,9 +253,9 @@ function recorderThreadConfigKeys(transcript: CodexAppServerReplayTranscript): R
 const THREAD_ENVIRONMENT_CONFIG_PREFIX = "shell_environment_policy.set.T3CODE_";
 
 /**
- * Thread requests must match on the `config` the client owns. `cwd`, `model`
- * and host-supplied MCP servers (machine-local URLs, short-lived authorization
- * headers) vary per machine, and recorder-only keys are not the client's.
+ * `cwd`, `model` and host-supplied MCP servers (machine-local URLs, short-lived
+ * authorization headers) vary per machine, and recorder-only keys are not the
+ * client's.
  */
 function normalizeThreadRequest(frame: unknown, ignoredConfigKeys: ReadonlySet<string>): unknown {
   if (typeof frame !== "object" || frame === null) return frame;
@@ -276,7 +271,11 @@ function normalizeThreadRequest(frame: unknown, ignoredConfigKeys: ReadonlySet<s
   }
   const { cwd: _cwd, model: _model, config, ...params } = record.params as Record<string, unknown>;
   if (typeof config !== "object" || config === null) return { ...record, params };
-  const { mcp_servers: _mcpServers, ...owned } = config as Record<string, unknown>;
+  const owned = Object.fromEntries(
+    Object.entries(config as Record<string, unknown>).filter(
+      ([key]) => key !== "mcp_servers" && !key.startsWith("mcp_servers."),
+    ),
+  );
   for (const key of ignoredConfigKeys) delete owned[key];
   // FORK: the thread's own T3CODE_* shell variables (thread id, project root) differ per run.
   for (const key of Object.keys(owned)) {

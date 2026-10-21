@@ -7,7 +7,7 @@ const steps = [
   { step: "Read", status: "completed" },
   { step: "Write", status: "inProgress" },
 ] as const;
-const progress = { step: "Write", completedSteps: 1, totalSteps: 2 };
+const progress = { step: "Write", completedSteps: 1, totalSteps: 2, live: true };
 
 describe("ComposerTasksBadge", () => {
   it.each(["inline", "tab"] as const)(
