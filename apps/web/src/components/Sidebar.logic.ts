@@ -526,19 +526,22 @@ export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "line
   return thread.lineage.relationshipToParent === "subagent";
 }
 
-// Subagent threads have no sidebar row, so an open subagent is represented by
-// its nearest non-subagent ancestor. A broken chain (missing parent, cycle,
-// other environment) resolves to the thread itself, which then matches no row.
+// FORK: an open subagent highlights its own row when it nests under its
+// parent (`hasRow`). One without a row is represented by its nearest ancestor
+// that has one, else its nearest non-subagent ancestor. A broken chain
+// (missing parent, cycle, other environment) resolves to the thread itself,
+// which then matches no row.
 export function resolveSidebarRowThreadId(
   threadId: ThreadId,
   environmentId: EnvironmentId,
   threads: readonly Pick<SidebarThreadSummary, "id" | "environmentId" | "lineage">[],
+  hasRow: (threadId: ThreadId) => boolean = () => false,
 ): ThreadId {
   const findThread = (id: ThreadId) =>
     threads.find((thread) => thread.id === id && thread.environmentId === environmentId);
   const visited = new Set<ThreadId>();
   let thread = findThread(threadId);
-  while (thread !== undefined && isSidebarSubagentThread(thread)) {
+  while (thread !== undefined && isSidebarSubagentThread(thread) && !hasRow(thread.id)) {
     if (thread.lineage.parentThreadId === null || visited.has(thread.id)) return threadId;
     visited.add(thread.id);
     thread = findThread(thread.lineage.parentThreadId);
@@ -546,6 +549,8 @@ export function resolveSidebarRowThreadId(
   return thread?.id ?? threadId;
 }
 
+// The section list: subagents never get a place of their own. FORK: the web
+// sidebar nests them under their parent instead (SidebarLaunches.logic).
 export function filterSidebarV2VisibleThreads<
   T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage"> & {
     environmentId: string;

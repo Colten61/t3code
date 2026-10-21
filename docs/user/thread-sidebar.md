@@ -235,6 +235,12 @@ Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent
 thread asks for it.
 
+On web and desktop, a thread's subagents sit under it in the sidebar, each with its own status.
+Only the ones that work or wait for you show on their own. Open the group by hand to see the
+finished ones too, or fold it, and the sidebar keeps that choice for the thread. Searching the
+thread list finds subagents and shows each under its parent. A subagent moves with its parent, so
+pin, snooze, settle, or shelve the parent instead.
+
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.

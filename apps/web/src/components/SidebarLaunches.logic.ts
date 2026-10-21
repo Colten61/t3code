@@ -1,8 +1,10 @@
 // FORK (T3MIG-FORK-013): threads an agent opened with t3_thread_launch or
 // create_threads sit under the thread that launched them, and every row says
 // whose move it is. The server records the launcher as `launchedByThreadId`
-// (older threads: read off their launch message), not as lineage, so subagent
-// hiding, forks and mobile back navigation are untouched.
+// (older threads: read off their launch message), not as lineage, so forks
+// and mobile back navigation are untouched. FORK: subagents nest in the same
+// forest under their lineage parent; they never get a place of their own and
+// follow their parent's. Mobile still hides them.
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { isLatestRunSettled } from "../session-logic";
 import type { SidebarThreadSummary } from "../types";
@@ -21,9 +23,10 @@ export function sidebarLaunchThreadKey(
 
 /**
  * Key of the thread a launched thread answers to: its launcher, or the
- * launcher's nearest ancestor when a provider subagent (hidden from the
- * sidebar) made the call. Null for threads a person made and for launchers
- * this client does not know (deleted, or not loaded yet).
+ * launcher's nearest non-subagent ancestor when a subagent made the call,
+ * since a subagent's row only follows its parent's place. Null for threads a
+ * person made and for launchers this client does not know (deleted, or not
+ * loaded yet).
  */
 export function resolveSidebarLauncherKey(
   thread: LaunchThread,
@@ -73,25 +76,34 @@ export function canNestSidebarLaunch(
 
 export interface SidebarLaunchForest {
   readonly parentKeyByChildKey: ReadonlyMap<string, string>;
-  /** Children in launch order (oldest first), so writer 1 stays above writer 2. */
+  /** Children in creation order (oldest first), so writer 1 stays above writer 2. */
   readonly childKeysByParentKey: ReadonlyMap<string, readonly string[]>;
+  /** The nested subagents; every other child is a launched thread. */
+  readonly subagentKeys: ReadonlySet<string>;
 }
 
 const EMPTY_FOREST: SidebarLaunchForest = {
   parentKeyByChildKey: new Map(),
   childKeysByParentKey: new Map(),
+  subagentKeys: new Set(),
 };
 
 /**
  * Nest each visible launched thread under its visible launcher. Only the
  * threads the sidebar shows take part, so nesting keeps the project scope;
  * a child launched into another project than its launcher's stays where it is.
+ *
+ * Subagents nest under their lineage parent wherever it sits, at any depth.
+ * One whose chain of parents reaches no row (another project, archived, not
+ * loaded) stays hidden: a subagent never becomes a root.
  */
 export function buildSidebarLaunchForest<
   T extends LaunchThread & { readonly createdAt: string },
 >(input: {
   readonly visible: readonly { readonly thread: T; readonly placement: SidebarLaunchPlacement }[];
   readonly threadByKey: ReadonlyMap<string, LaunchThread>;
+  /** Unarchived subagent threads, kept out of `visible`. */
+  readonly subagents?: readonly T[] | undefined;
 }): SidebarLaunchForest {
   const visibleByKey = new Map(
     input.visible.map((entry) => [sidebarLaunchThreadKey(entry.thread), entry] as const),
@@ -110,7 +122,6 @@ export function buildSidebarLaunchForest<
       parentKeyByChildKey.set(sidebarLaunchThreadKey(entry.thread), parentKey);
     }
   }
-  if (parentKeyByChildKey.size === 0) return EMPTY_FOREST;
   // A launch cycle cannot happen through the tools, but corrupt data must not
   // hide every thread in it: break each cycle at the thread that closes it.
   for (const childKey of [...parentKeyByChildKey.keys()]) {
@@ -125,10 +136,15 @@ export function buildSidebarLaunchForest<
       cursor = parentKeyByChildKey.get(cursor);
     }
   }
+  const subagentKeys = attachSidebarSubagents({
+    subagents: input.subagents ?? [],
+    hasRow: (key) => visibleByKey.has(key),
+    parentKeyByChildKey,
+  });
+  if (parentKeyByChildKey.size === 0) return EMPTY_FOREST;
   const createdAtByKey = new Map(
-    input.visible.map(
-      (entry) =>
-        [sidebarLaunchThreadKey(entry.thread), Date.parse(entry.thread.createdAt) || 0] as const,
+    [...input.visible.map((entry) => entry.thread), ...(input.subagents ?? [])].map(
+      (thread) => [sidebarLaunchThreadKey(thread), Date.parse(thread.createdAt) || 0] as const,
     ),
   );
   const childKeysByParentKey = new Map<string, string[]>();
@@ -144,7 +160,60 @@ export function buildSidebarLaunchForest<
         left.localeCompare(right),
     );
   }
-  return { parentKeyByChildKey, childKeysByParentKey };
+  return { parentKeyByChildKey, childKeysByParentKey, subagentKeys };
+}
+
+/**
+ * Add an edge for every subagent whose chain of parents reaches a row. Each
+ * thread is walked once (the answer is shared along the path), so this stays
+ * linear in the thousands of settled subagents a long-lived install keeps.
+ */
+function attachSidebarSubagents(input: {
+  readonly subagents: readonly LaunchThread[];
+  readonly hasRow: (key: string) => boolean;
+  readonly parentKeyByChildKey: Map<string, string>;
+}): ReadonlySet<string> {
+  const subagentKeys = new Set<string>();
+  if (input.subagents.length === 0) return subagentKeys;
+  const parentKeyOf = new Map<string, string>();
+  for (const subagent of input.subagents) {
+    if (subagent.lineage.parentThreadId === null) continue;
+    parentKeyOf.set(
+      sidebarLaunchThreadKey(subagent),
+      sidebarLaunchThreadKey({
+        environmentId: subagent.environmentId,
+        id: subagent.lineage.parentThreadId,
+      }),
+    );
+  }
+  const reachesRow = new Map<string, boolean>();
+  for (const key of parentKeyOf.keys()) {
+    const path: string[] = [];
+    let cursor: string | undefined = key;
+    let reaches = false;
+    while (cursor !== undefined) {
+      if (input.hasRow(cursor)) {
+        reaches = true;
+        break;
+      }
+      const known = reachesRow.get(cursor);
+      if (known !== undefined) {
+        reaches = known;
+        break;
+      }
+      // Marked before stepping on, so a lineage cycle reads as unreachable.
+      reachesRow.set(cursor, false);
+      path.push(cursor);
+      cursor = parentKeyOf.get(cursor);
+    }
+    for (const step of path) reachesRow.set(step, reaches);
+  }
+  for (const [key, parentKey] of parentKeyOf) {
+    if (reachesRow.get(key) !== true) continue;
+    input.parentKeyByChildKey.set(key, parentKey);
+    subagentKeys.add(key);
+  }
+  return subagentKeys;
 }
 
 export function sidebarLaunchDescendantKeys(
@@ -190,7 +259,8 @@ const SIDEBAR_SECTIONS = ["pinned", "active", "working", "snoozed", "shelved", "
  * Take nested threads out of the sections, which then hold only the rows the
  * drag and drop list arranges; their children render under them. A group
  * whose root folded into the Working shelf comes back to the inbox while
- * anything in it waits for the user, the way that thread alone would.
+ * a launched thread in it waits for the user, the way that thread alone
+ * would. A subagent's questions already show on its parent, so it never does.
  */
 export function nestSidebarLaunchedThreads<
   T extends LaunchThread & { readonly createdAt: string },
@@ -198,10 +268,13 @@ export function nestSidebarLaunchedThreads<
   readonly sections: SidebarLaunchSections<T>;
   readonly threadByKey: ReadonlyMap<string, LaunchThread>;
   readonly holdsInbox: (thread: T) => boolean;
+  /** Unarchived subagent threads, kept out of the sections. */
+  readonly subagents?: readonly T[] | undefined;
 }): {
   readonly sections: SidebarLaunchSections<T>;
   readonly forest: SidebarLaunchForest;
-  /** The section each nested thread sits in on its own, for its row's look and actions. */
+  /** The section each nested thread sits in on its own (a subagent: its
+      nearest launched or root ancestor's), for its row's look and actions. */
   readonly nestedSectionByKey: ReadonlyMap<string, SidebarSection>;
   readonly nestedThreadByKey: ReadonlyMap<string, T>;
 } {
@@ -212,7 +285,11 @@ export function nestSidebarLaunchedThreads<
       placement: sidebarLaunchPlacement(section),
     })),
   );
-  const forest = buildSidebarLaunchForest({ visible: entries, threadByKey: input.threadByKey });
+  const forest = buildSidebarLaunchForest({
+    visible: entries,
+    threadByKey: input.threadByKey,
+    subagents: input.subagents,
+  });
   if (forest.parentKeyByChildKey.size === 0) {
     return {
       sections: input.sections,
@@ -224,13 +301,27 @@ export function nestSidebarLaunchedThreads<
   const entryByKey = new Map(
     entries.map((entry) => [sidebarLaunchThreadKey(entry.thread), entry] as const),
   );
+  const subagentByKey = new Map(
+    (input.subagents ?? []).map((thread) => [sidebarLaunchThreadKey(thread), thread] as const),
+  );
   const nestedSectionByKey = new Map<string, SidebarSection>();
   const nestedThreadByKey = new Map<string, T>();
   for (const childKey of forest.parentKeyByChildKey.keys()) {
     const entry = entryByKey.get(childKey);
-    if (entry === undefined) continue;
-    nestedSectionByKey.set(childKey, entry.section);
-    nestedThreadByKey.set(childKey, entry.thread);
+    if (entry !== undefined) {
+      nestedSectionByKey.set(childKey, entry.section);
+      nestedThreadByKey.set(childKey, entry.thread);
+      continue;
+    }
+    const subagent = subagentByKey.get(childKey);
+    let placeKey = forest.parentKeyByChildKey.get(childKey);
+    while (placeKey !== undefined && !entryByKey.has(placeKey)) {
+      placeKey = forest.parentKeyByChildKey.get(placeKey);
+    }
+    const place = placeKey === undefined ? undefined : entryByKey.get(placeKey);
+    if (subagent === undefined || place === undefined) continue;
+    nestedSectionByKey.set(childKey, place.section);
+    nestedThreadByKey.set(childKey, subagent);
   }
   const roots = (section: (typeof SIDEBAR_SECTIONS)[number]) =>
     input.sections[section].filter(
@@ -242,7 +333,7 @@ export function nestSidebarLaunchedThreads<
     const holds = sidebarLaunchDescendantKeys(forest, sidebarLaunchThreadKey(thread)).some(
       (key) => {
         const child = nestedThreadByKey.get(key);
-        return child !== undefined && input.holdsInbox(child);
+        return child !== undefined && !forest.subagentKeys.has(key) && input.holdsInbox(child);
       },
     );
     (holds ? active : working).push(thread);
@@ -264,31 +355,103 @@ export function nestSidebarLaunchedThreads<
 
 // ── Collapsing ──────────────────────────────────────────────────────
 
-/** Groups open by default so every row's state shows; collapsing one is remembered. */
-export const SIDEBAR_LAUNCH_GROUPS_EXPANDED_BY_DEFAULT = true;
-/** Remembered toggles beyond this many drop the oldest first. */
-const SIDEBAR_LAUNCH_TOGGLE_LIMIT = 200;
-
 /**
- * Collapse state stores only the groups the user toggled away from the
- * default, so flipping the default keeps every explicit choice.
+ * What a group shows until the user opens or folds it: its launched threads,
+ * so every writer's state shows, and only the subagents that work or wait on
+ * the user, since most parents keep a long tail of finished ones. A group
+ * showing part of itself ("some") reads as folded: its toggle opens the rest.
  */
-export function isSidebarLaunchGroupExpanded(input: {
-  readonly parentKey: string;
-  readonly toggledKeys: ReadonlySet<string>;
-  readonly expandedByDefault: boolean;
-}): boolean {
-  return input.toggledKeys.has(input.parentKey)
-    ? !input.expandedByDefault
-    : input.expandedByDefault;
+export type SidebarLaunchGroupDefault = "all" | "some" | "none";
+
+export interface SidebarLaunchGroupDefaults {
+  /** Nested subagents that work or wait on the user. */
+  readonly busySubagentKeys: ReadonlySet<string>;
+  readonly byParentKey: ReadonlyMap<string, SidebarLaunchGroupDefault>;
 }
 
+function isSidebarStatusBusy(status: SidebarThreadStatus): boolean {
+  return (
+    status === "working" || status === "waiting" || status === "approval" || status === "input"
+  );
+}
+
+export function resolveSidebarLaunchGroupDefaults(input: {
+  readonly forest: SidebarLaunchForest;
+  /** A nested subagent's status, with the work of the threads under it. */
+  readonly subagentStatus: (key: string) => SidebarThreadStatus | null;
+}): SidebarLaunchGroupDefaults {
+  const { forest } = input;
+  const busySubagentKeys = new Set<string>();
+  for (const key of forest.subagentKeys) {
+    const status = input.subagentStatus(key);
+    if (status !== null && isSidebarStatusBusy(status)) busySubagentKeys.add(key);
+  }
+  const byParentKey = new Map<string, SidebarLaunchGroupDefault>();
+  for (const [parentKey, childKeys] of forest.childKeysByParentKey) {
+    const shown = childKeys.filter(
+      (key) => !forest.subagentKeys.has(key) || busySubagentKeys.has(key),
+    ).length;
+    byParentKey.set(parentKey, shown === childKeys.length ? "all" : shown === 0 ? "none" : "some");
+  }
+  return { busySubagentKeys, byParentKey };
+}
+
+/** Remembered toggles beyond this many drop the oldest first. */
+const SIDEBAR_LAUNCH_TOGGLE_LIMIT = 200;
+const OPENED_CHOICE_PREFIX = "+";
+
+/**
+ * The groups the user opened or folded. A bare key is a folded group, the
+ * only choice stored while every group opened by default; a "+" key an
+ * opened one.
+ */
+export function readSidebarLaunchGroupChoices(
+  stored: readonly string[],
+): ReadonlyMap<string, boolean> {
+  return new Map(
+    stored.map((entry) =>
+      entry.startsWith(OPENED_CHOICE_PREFIX)
+        ? ([entry.slice(OPENED_CHOICE_PREFIX.length), true] as const)
+        : ([entry, false] as const),
+    ),
+  );
+}
+
+export function isSidebarLaunchGroupExpanded(input: {
+  readonly choice: boolean | undefined;
+  readonly byDefault: SidebarLaunchGroupDefault;
+}): boolean {
+  return input.choice ?? input.byDefault === "all";
+}
+
+/** A group the user opened shows every child, finished subagents too. */
+export function isSidebarLaunchChildShown(input: {
+  readonly choice: boolean | undefined;
+  readonly isSubagent: boolean;
+  readonly isBusy: boolean;
+}): boolean {
+  return input.choice ?? (!input.isSubagent || input.isBusy);
+}
+
+/**
+ * Open or fold a whole group. The choice is remembered and wins over what the
+ * group does by itself, except when it is exactly that: then it is dropped,
+ * so folding a group back lets it open for its next busy subagent.
+ */
 export function toggleSidebarLaunchGroup(
-  toggledKeys: readonly string[],
+  stored: readonly string[],
   parentKey: string,
+  byDefault: SidebarLaunchGroupDefault,
 ): string[] {
-  if (toggledKeys.includes(parentKey)) return toggledKeys.filter((key) => key !== parentKey);
-  return [...toggledKeys, parentKey].slice(-SIDEBAR_LAUNCH_TOGGLE_LIMIT);
+  const choice = readSidebarLaunchGroupChoices(stored).get(parentKey);
+  const expand = !isSidebarLaunchGroupExpanded({ choice, byDefault });
+  const rest = stored.filter(
+    (entry) => entry !== parentKey && entry !== `${OPENED_CHOICE_PREFIX}${parentKey}`,
+  );
+  if (expand ? byDefault === "all" : byDefault === "none") return rest;
+  return [...rest, expand ? `${OPENED_CHOICE_PREFIX}${parentKey}` : parentKey].slice(
+    -SIDEBAR_LAUNCH_TOGGLE_LIMIT,
+  );
 }
 
 /**
@@ -299,21 +462,77 @@ export function toggleSidebarLaunchGroup(
 export function flattenSidebarLaunchGroup(input: {
   readonly rootKey: string;
   readonly forest: SidebarLaunchForest;
-  readonly isExpanded: (parentKey: string) => boolean;
+  readonly isShown: (parentKey: string, childKey: string) => boolean;
   readonly routeThreadKey: string | null;
 }): { readonly key: string; readonly depth: number }[] {
   const keep = new Set(sidebarLaunchAncestorKeys(input.forest, input.routeThreadKey));
   if (input.routeThreadKey !== null) keep.add(input.routeThreadKey);
   const rows: { key: string; depth: number }[] = [];
   const visit = (key: string, depth: number) => {
-    const expanded = input.isExpanded(key);
     for (const childKey of input.forest.childKeysByParentKey.get(key) ?? []) {
-      if (!expanded && !keep.has(childKey)) continue;
+      if (!keep.has(childKey) && !input.isShown(key, childKey)) continue;
       rows.push({ key: childKey, depth });
       visit(childKey, depth + 1);
     }
   };
   visit(input.rootKey, 1);
+  return rows;
+}
+
+// ── Search ──────────────────────────────────────────────────────────
+
+export interface SidebarSearchRow<T> {
+  readonly thread: T;
+  /** 0 for a thread with a row of its own, then one more per subagent level. */
+  readonly depth: number;
+  /** An ancestor that does not match, shown so a matching subagent has its place. */
+  readonly isContext: boolean;
+}
+
+/**
+ * Search results in match order, each matching subagent under its chain of
+ * subagent parents up to the thread with a row of its own. A thread that
+ * matches keeps its own place, or the earlier one a matching subagent gave it.
+ */
+export function nestSidebarSearchResults<T extends LaunchThread>(input: {
+  readonly matches: readonly T[];
+  /** Every searchable thread, to find the ancestors that do not match. */
+  readonly threads: readonly T[];
+  readonly forest: SidebarLaunchForest;
+}): SidebarSearchRow<T>[] {
+  const { forest } = input;
+  if (!input.matches.some((thread) => forest.subagentKeys.has(sidebarLaunchThreadKey(thread)))) {
+    return input.matches.map((thread) => ({ thread, depth: 0, isContext: false }));
+  }
+  const matchedKeys = new Set(input.matches.map(sidebarLaunchThreadKey));
+  const includedKeys = new Set<string>();
+  const anchorKeys: string[] = [];
+  for (const match of input.matches) {
+    let key: string | undefined = sidebarLaunchThreadKey(match);
+    while (key !== undefined && forest.subagentKeys.has(key) && !includedKeys.has(key)) {
+      includedKeys.add(key);
+      key = forest.parentKeyByChildKey.get(key);
+    }
+    if (key !== undefined && !includedKeys.has(key)) {
+      includedKeys.add(key);
+      anchorKeys.push(key);
+    }
+  }
+  const threadByKey = new Map(
+    input.threads.map((thread) => [sidebarLaunchThreadKey(thread), thread] as const),
+  );
+  const rows: SidebarSearchRow<T>[] = [];
+  const visit = (key: string, depth: number) => {
+    const thread = threadByKey.get(key);
+    if (thread === undefined) return;
+    rows.push({ thread, depth, isContext: !matchedKeys.has(key) });
+    for (const childKey of forest.childKeysByParentKey.get(key) ?? []) {
+      if (forest.subagentKeys.has(childKey) && includedKeys.has(childKey)) {
+        visit(childKey, depth + 1);
+      }
+    }
+  };
+  for (const key of anchorKeys) visit(key, 0);
   return rows;
 }
 
@@ -399,12 +618,6 @@ export interface SidebarMoveLauncher {
   readonly status: SidebarThreadStatus;
 }
 
-function launcherIsBusy(status: SidebarThreadStatus): boolean {
-  return (
-    status === "working" || status === "waiting" || status === "approval" || status === "input"
-  );
-}
-
 /**
  * Whose move a row's pill names. The pill shows exactly when it shows today:
  * a stopped thread gets one only while its completion is unread (see
@@ -461,7 +674,7 @@ export function resolveSidebarMoveState(input: {
     return { kind: "needs-you", reason: "finished", tooltip: "Finished its turn" };
   }
   const launcherTitle = `«${input.launcher.title}»`;
-  if (launcherIsBusy(input.launcher.status)) {
+  if (isSidebarStatusBusy(input.launcher.status)) {
     return {
       kind: "with-orchestrator",
       reason: "launcher-busy",
@@ -524,6 +737,7 @@ export interface SidebarLaunchGroupMember {
   readonly hasPlanPrompt: boolean;
   readonly goalActive: boolean;
   readonly launcher: SidebarMoveLauncher | null;
+  readonly subagent?: boolean;
 }
 
 /**
@@ -531,11 +745,24 @@ export interface SidebarLaunchGroupMember {
  * does not fade once read: a finished child someone opened is still waiting
  * on its orchestrator. Only the plan prompt keeps the pill's timing, so a
  * plan the user already read does not keep lifting.
+ *
+ * A subagent counts only while it works or asks: its result and its failure
+ * are its parent's to read, and its questions already show on the parent, so
+ * it has no move to lift.
  */
 export function resolveSidebarLaunchMemberState(member: SidebarLaunchGroupMember): {
   readonly state: SidebarLaunchGroupState | null;
   readonly move: SidebarMoveState | null;
 } {
+  if (member.subagent === true) {
+    const state =
+      member.status === "approval" || member.status === "input"
+        ? "needs-you"
+        : member.status === "working" || member.status === "waiting"
+          ? "working"
+          : null;
+    return { state, move: null };
+  }
   if (member.status === "failed" || member.status === "limited") {
     return { state: "failed", move: null };
   }
@@ -587,13 +814,20 @@ export function summarizeSidebarLaunchGroup(
     .map(
       (state) => `${countByState[state]} ${SIDEBAR_LAUNCH_GROUP_STATE_LABEL[state].toLowerCase()}`,
     );
-  const noun = members.length === 1 ? "launched thread" : "launched threads";
+  const subagents = members.filter((member) => member.subagent === true).length;
+  const launched = members.length - subagents;
+  const nouns = [
+    launched === 0
+      ? null
+      : `${launched} ${launched === 1 ? "launched thread" : "launched threads"}`,
+    subagents === 0 ? null : `${subagents} ${subagents === 1 ? "subagent" : "subagents"}`,
+  ].filter((noun) => noun !== null);
   return {
     count: members.length,
     mostUrgent,
     countByState,
     needsYou,
-    tooltip: `${members.length} ${noun}${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`,
+    tooltip: `${nouns.join(" and ")}${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`,
   };
 }
 

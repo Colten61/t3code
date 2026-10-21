@@ -500,6 +500,38 @@ describe("sidebar thread lineage helpers", () => {
     expect(resolveSidebarRowThreadId(loopA.id, environmentId, [loopA, loopB])).toBe(loopA.id);
   });
 
+  it("highlights an open subagent's own row once it nests under its parent", () => {
+    const environmentId = EnvironmentId.make("environment-row");
+    const subagentOf = (id: string, parentId: ThreadId) =>
+      makeThreadFixture({
+        id: ThreadId.make(id),
+        environmentId,
+        lineage: {
+          rootThreadId: parentId,
+          parentThreadId: parentId,
+          relationshipToParent: "subagent",
+        },
+      });
+    const root = makeThreadFixture({ id: ThreadId.make("thread-root"), environmentId });
+    const child = subagentOf("thread-child", root.id);
+    const grandchild = subagentOf("thread-grandchild", child.id);
+    // Archived, so it has no row of its own.
+    const hidden = subagentOf("thread-hidden", grandchild.id);
+    const threads = [root, child, grandchild, hidden];
+    const nested = new Set<ThreadId>([child.id, grandchild.id]);
+    const hasRow = (threadId: ThreadId) => nested.has(threadId);
+
+    expect(resolveSidebarRowThreadId(child.id, environmentId, threads, hasRow)).toBe(child.id);
+    expect(resolveSidebarRowThreadId(grandchild.id, environmentId, threads, hasRow)).toBe(
+      grandchild.id,
+    );
+    expect(resolveSidebarRowThreadId(hidden.id, environmentId, threads, hasRow)).toBe(
+      grandchild.id,
+    );
+    expect(resolveSidebarRowThreadId(root.id, environmentId, threads, hasRow)).toBe(root.id);
+    expect(resolveSidebarRowThreadId(grandchild.id, environmentId, threads)).toBe(root.id);
+  });
+
   it("resolves the parent thread for fork sidebar affordances", () => {
     const parentId = ThreadId.make("thread-parent");
     const fallbackParentId = ThreadId.make("thread-fallback-parent");

@@ -208,6 +208,7 @@ import {
   firstValidTimestampMs,
   hasUnseenCompletion,
   isSidebarNestedLinkClick,
+  isSidebarSubagentThread,
   isSidebarThreadWorking,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -248,11 +249,15 @@ import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   flattenSidebarLaunchGroup,
   hasSidebarPlanPrompt,
+  isSidebarLaunchChildShown,
   isSidebarLaunchGroupExpanded,
   isSidebarMoveUnread,
   liftSidebarMoveState,
   nestSidebarLaunchedThreads,
+  nestSidebarSearchResults,
+  readSidebarLaunchGroupChoices,
   resolveSidebarFamilyStatus,
+  resolveSidebarLaunchGroupDefaults,
   resolveSidebarLauncherKey,
   resolveSidebarMoveRecede,
   resolveSidebarMoveState,
@@ -261,9 +266,9 @@ import {
   sidebarThreadHoldsInbox,
   summarizeSidebarLaunchGroup,
   toggleSidebarLaunchGroup,
-  SIDEBAR_LAUNCH_GROUPS_EXPANDED_BY_DEFAULT,
   SIDEBAR_MOVE_LABEL,
   type SidebarLaunchForest,
+  type SidebarLaunchGroupMember,
   type SidebarLaunchGroupState,
   type SidebarLaunchGroupSummary,
   type SidebarMoveLauncher,
@@ -497,7 +502,7 @@ function resolveSidebarLaunchRows(input: {
   readonly forest: SidebarLaunchForest;
   readonly nestedThreadByKey: ReadonlyMap<string, EnvironmentThreadShell>;
   readonly nestedSectionByKey: ReadonlyMap<string, SidebarSection>;
-  readonly isExpanded: (parentKey: string) => boolean;
+  readonly isShown: (parentKey: string, childKey: string) => boolean;
   readonly routeThreadKey: string | null;
 }): ReadonlyMap<string, readonly SidebarLaunchRow[]> {
   const { forest, nestedThreadByKey, nestedSectionByKey } = input;
@@ -507,7 +512,7 @@ function resolveSidebarLaunchRows(input: {
     const rows = flattenSidebarLaunchGroup({
       rootKey,
       forest,
-      isExpanded: input.isExpanded,
+      isShown: input.isShown,
       routeThreadKey: input.routeThreadKey,
     }).flatMap(({ key, depth }) => {
       const thread = nestedThreadByKey.get(key);
@@ -520,7 +525,8 @@ function resolveSidebarLaunchRows(input: {
 }
 
 // FORK (T3MIG-FORK-013): whose move it is needs each launched thread's
-// launcher, and each group's parent the states of the threads nested under it.
+// launcher, and each group's parent the states of the threads nested under it
+// (subagents included).
 function resolveSidebarLaunchMoves(input: {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly forest: SidebarLaunchForest;
@@ -533,7 +539,10 @@ function resolveSidebarLaunchMoves(input: {
   const { threads, forest, workingFamilyByKey, threadLastVisitedAtById } = input;
   const launcherByKey = new Map<string, SidebarMoveLauncher>();
   const launchGroupByKey = new Map<string, SidebarLaunchGroupSummary>();
-  if (!threads.some((thread) => thread.launchedByThreadId !== undefined)) {
+  if (
+    forest.childKeysByParentKey.size === 0 &&
+    !threads.some((thread) => thread.launchedByThreadId !== undefined)
+  ) {
     return { launcherByKey, launchGroupByKey };
   }
   const threadByKey = new Map(threads.map((thread) => [threadShellKey(thread), thread] as const));
@@ -550,32 +559,55 @@ function resolveSidebarLaunchMoves(input: {
       ),
     });
   }
+  // Each nested thread is in the summary of every group above it; work it out once.
+  const memberByKey = new Map<string, SidebarLaunchGroupMember>();
+  const resolveMember = (childKey: string): SidebarLaunchGroupMember | undefined => {
+    const child = threadByKey.get(childKey);
+    if (child === undefined) return undefined;
+    const status = resolveSidebarFamilyStatus(
+      resolveSidebarThreadStatus(child),
+      workingFamilyByKey.has(childKey),
+    );
+    // Only a subagent's status counts (resolveSidebarLaunchMemberState), so
+    // its long settled tail costs no read-state work.
+    if (forest.subagentKeys.has(childKey)) {
+      return {
+        title: child.title,
+        status,
+        isUnread: false,
+        hasPlanPrompt: false,
+        goalActive: false,
+        launcher: null,
+        subagent: true,
+      };
+    }
+    const lastVisitedAt = resolveThreadLastVisitedAt(
+      child.lastVisitedAt,
+      threadLastVisitedAtById[childKey],
+    );
+    return {
+      title: child.title,
+      status,
+      isUnread: isSidebarMoveUnread({
+        isUnread: hasUnseenCompletion({ ...child, lastVisitedAt }),
+        isLaunched: true,
+        lastVisitedAt,
+        latestRun: child.latestRun,
+      }),
+      hasPlanPrompt: hasSidebarPlanPrompt(child),
+      goalActive: child.goal?.status === "active",
+      launcher: launcherByKey.get(childKey) ?? null,
+    };
+  };
   for (const parentKey of forest.childKeysByParentKey.keys()) {
     const members = sidebarLaunchDescendantKeys(forest, parentKey).flatMap((childKey) => {
-      const child = threadByKey.get(childKey);
-      if (child === undefined) return [];
-      const lastVisitedAt = resolveThreadLastVisitedAt(
-        child.lastVisitedAt,
-        threadLastVisitedAtById[childKey],
-      );
-      return [
-        {
-          title: child.title,
-          status: resolveSidebarFamilyStatus(
-            resolveSidebarThreadStatus(child),
-            workingFamilyByKey.has(childKey),
-          ),
-          isUnread: isSidebarMoveUnread({
-            isUnread: hasUnseenCompletion({ ...child, lastVisitedAt }),
-            isLaunched: true,
-            lastVisitedAt,
-            latestRun: child.latestRun,
-          }),
-          hasPlanPrompt: hasSidebarPlanPrompt(child),
-          goalActive: child.goal?.status === "active",
-          launcher: launcherByKey.get(childKey) ?? null,
-        },
-      ];
+      let member = memberByKey.get(childKey);
+      if (member === undefined) {
+        member = resolveMember(childKey);
+        if (member === undefined) return [];
+        memberByKey.set(childKey, member);
+      }
+      return [member];
     });
     const summary = summarizeSidebarLaunchGroup(members);
     if (summary !== null) launchGroupByKey.set(parentKey, summary);
@@ -607,19 +639,6 @@ function useSidebarThreads(input: {
     },
     threadShellKey,
   );
-  const routeRowThreadKey =
-    routeThreadRef === null
-      ? null
-      : scopedThreadKey(
-          scopeThreadRef(
-            routeThreadRef.environmentId,
-            resolveSidebarRowThreadId(
-              routeThreadRef.threadId,
-              routeThreadRef.environmentId,
-              threads,
-            ),
-          ),
-        );
   const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
   const nowMinute = useNowMinute();
   // Snooze wake times are second-precise, so classifying with the quantized
@@ -650,8 +669,7 @@ function useSidebarThreads(input: {
     false,
     Schema.Boolean,
   );
-  // FORK (T3MIG-FORK-013): launch groups open by default and remember the
-  // groups the user toggled.
+  // FORK (T3MIG-FORK-013): the groups the user opened or folded.
   const [launchGroupToggles, setLaunchGroupToggles] = useLocalStorage(
     LAUNCH_GROUP_TOGGLES_KEY,
     EMPTY_LAUNCH_GROUP_TOGGLES,
@@ -692,6 +710,23 @@ function useSidebarThreads(input: {
     nestedSectionByKey,
     nestedThreadByKey,
   } = partition;
+  const routeRowThreadKey =
+    routeThreadRef === null
+      ? null
+      : scopedThreadKey(
+          scopeThreadRef(
+            routeThreadRef.environmentId,
+            resolveSidebarRowThreadId(
+              routeThreadRef.threadId,
+              routeThreadRef.environmentId,
+              threads,
+              (threadId) =>
+                launchForest.subagentKeys.has(
+                  scopedThreadKey(scopeThreadRef(routeThreadRef.environmentId, threadId)),
+                ),
+            ),
+          ),
+        );
   // FORK (T3MIG-FORK-013): an open nested thread keeps its group's root row
   // wherever the shelves below keep the open thread's row.
   const routeShelfThreadKey =
@@ -722,18 +757,38 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeShelfThreadKey);
-  const launchGroupToggledKeys = new Set(launchGroupToggles);
+  // FORK (T3MIG-FORK-013): launched threads show by default, subagents while
+  // they work or wait on the user; a remembered choice wins.
+  const launchGroupChoices = readSidebarLaunchGroupChoices(launchGroupToggles);
+  const launchGroupDefaults = resolveSidebarLaunchGroupDefaults({
+    forest: launchForest,
+    subagentStatus: (key) => {
+      const subagent = nestedThreadByKey.get(key);
+      return subagent === undefined
+        ? null
+        : resolveSidebarFamilyStatus(
+            resolveSidebarThreadStatus(subagent),
+            workingFamilyByKey.has(key),
+          );
+    },
+  });
+  const launchGroupDefault = (parentKey: string) =>
+    launchGroupDefaults.byParentKey.get(parentKey) ?? "all";
   const isLaunchGroupExpanded = (parentKey: string) =>
     isSidebarLaunchGroupExpanded({
-      parentKey,
-      toggledKeys: launchGroupToggledKeys,
-      expandedByDefault: SIDEBAR_LAUNCH_GROUPS_EXPANDED_BY_DEFAULT,
+      choice: launchGroupChoices.get(parentKey),
+      byDefault: launchGroupDefault(parentKey),
     });
   const launchRowsByRootKey = resolveSidebarLaunchRows({
     forest: launchForest,
     nestedThreadByKey,
     nestedSectionByKey,
-    isExpanded: isLaunchGroupExpanded,
+    isShown: (parentKey, childKey) =>
+      isSidebarLaunchChildShown({
+        choice: launchGroupChoices.get(parentKey),
+        isSubagent: launchForest.subagentKeys.has(childKey),
+        isBusy: launchGroupDefaults.busySubagentKeys.has(childKey),
+      }),
     routeThreadKey: routeRowThreadKey,
   });
   const { launcherByKey, launchGroupByKey } = resolveSidebarLaunchMoves({
@@ -769,8 +824,11 @@ function useSidebarThreads(input: {
   ] as const) {
     for (const thread of list) sectionByThreadKey.set(threadShellKey(thread), section);
   }
-  // FORK (T3MIG-FORK-013): nested rows sweep with the rows of their own section.
-  for (const [key, section] of nestedSectionByKey) sectionByThreadKey.set(key, section);
+  // FORK (T3MIG-FORK-013): nested rows sweep with the rows of their own
+  // section. Subagents follow their parent, so they never sweep or park.
+  for (const [key, section] of nestedSectionByKey) {
+    if (!launchForest.subagentKeys.has(key)) sectionByThreadKey.set(key, section);
+  }
   const keysInSection = (wanted: SidebarSection) =>
     new Set([...sectionByThreadKey].flatMap(([key, section]) => (section === wanted ? [key] : [])));
   return {
@@ -813,7 +871,9 @@ function useSidebarThreads(input: {
     launchGroupByKey,
     isLaunchGroupExpanded,
     toggleLaunchGroup: (parentKey: string) =>
-      setLaunchGroupToggles((keys) => toggleSidebarLaunchGroup(keys, parentKey)),
+      setLaunchGroupToggles((keys) =>
+        toggleSidebarLaunchGroup(keys, parentKey, launchGroupDefault(parentKey)),
+      ),
     orderedThreadKeys: orderedThreads.map(threadShellKey),
     threadByKey: new Map(orderedThreads.map((thread) => [threadShellKey(thread), thread] as const)),
     settledThreadKeys: keysInSection("settled"),
@@ -908,10 +968,14 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   }
   // FORK (T3MIG-FORK-013): launched threads leave the sections, which keep
   // the rows drag and drop arranges, and render under their launcher.
+  // Subagents never had a place there and nest under their parent.
   const launches = nestSidebarLaunchedThreads({
     sections: { pinned, active, working, snoozed, shelved, settled },
     threadByKey: new Map(threads.map((thread) => [threadShellKey(thread), thread] as const)),
     holdsInbox: sidebarThreadHoldsInbox,
+    subagents: threads.filter(
+      (thread) => thread.archivedAt === null && isSidebarSubagentThread(thread),
+    ),
   });
   // Server capability only gates DRAGGING — it must not influence the
   // sort, or mixed-version fleets would render different pinned orders on
@@ -1496,8 +1560,8 @@ function SortableThreadRow(
   return <SidebarThreadRow key={rowProps.variant} {...rowProps} sortable={bag} />;
 }
 
-// FORK (T3MIG-FORK-013): a nested launched thread takes a sortable row's props
-// but stays out of drag and drop; only its group's root is sortable.
+// FORK (T3MIG-FORK-013): a nested launched thread or subagent takes a sortable
+// row's props but stays out of drag and drop; only its group's root is sortable.
 function NestedSidebarThreadRow(props: Parameters<typeof SortableThreadRow>[0]) {
   const {
     sortableId: _sortableId,
@@ -1933,6 +1997,41 @@ function SidebarLaunchGroupToggle(props: {
   );
 }
 
+type SidebarStatusIconKind =
+  | "working"
+  | "waiting"
+  | "approval"
+  | "input"
+  | "plan"
+  | "orchestrator"
+  | "failed"
+  | "woke"
+  | "done";
+
+// The status pill's icon; a slim subagent row shows it alone.
+function SidebarStatusIcon(props: { icon: SidebarStatusIconKind }) {
+  switch (props.icon) {
+    case "working":
+      return <CircleDashedIcon aria-hidden className="size-4 shrink-0" />;
+    case "waiting":
+      return <CircleDotDashedIcon aria-hidden className="size-4 shrink-0" />;
+    case "input":
+      return <MessageCircleQuestionIcon aria-hidden className="size-4 shrink-0" />;
+    case "approval":
+      return <ShieldQuestionIcon aria-hidden className="size-4 shrink-0" />;
+    case "failed":
+      return <CircleAlertIcon aria-hidden className="size-4 shrink-0" />;
+    case "done":
+      return <CircleCheckIcon aria-hidden className="size-4 shrink-0" />;
+    case "plan":
+      return <ListChecksIcon aria-hidden className="size-4 shrink-0" />;
+    case "orchestrator":
+      return <CornerLeftUpIcon aria-hidden className="size-4 shrink-0" />;
+    case "woke":
+      return <AlarmClockIcon aria-hidden className="size-4 shrink-0" />;
+  }
+}
+
 // FORK (T3MIG-FORK-013): the look of each whose-move pill. Hues follow the
 // statuses they replace: amber approval, indigo input, sky working, violet
 // plan (the legacy Plan Ready), green done; waiting on another agent is grey.
@@ -2031,6 +2130,9 @@ type SidebarThreadRowProps = {
   // FORK: the threads at work for this one (its subagents and the threads it
   // launched); while any is, a thread whose own turn ended reads as working.
   workingFamily: readonly EnvironmentThreadShell[];
+  // FORK: a nested subagent's slim row leads with its status instead of the
+  // project, which is its parent's.
+  isSubagent: boolean;
 };
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
@@ -2164,16 +2266,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   // showed before; only failed, limited and woken rows keep their own label.
   const topStatus: {
     label: string;
-    icon:
-      | "working"
-      | "waiting"
-      | "approval"
-      | "input"
-      | "plan"
-      | "orchestrator"
-      | "failed"
-      | "woke"
-      | "done";
+    icon: SidebarStatusIconKind;
     className: string;
   } | null =
     status === "limited"
@@ -2636,15 +2729,23 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             }
           >
             {accessibleTitle}
-            <span
-              className={cn(
-                "flex shrink-0 items-center transition-opacity",
-                (!props.isActive || variantAction === "unsettle") &&
-                  "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
-              )}
-            >
-              {props.project ? <ProjectFavicon project={props.project} className="size-4" /> : null}
-            </span>
+            {props.isSubagent ? (
+              <span className={cn("flex size-4 shrink-0 items-center", topStatus?.className)}>
+                {topStatus ? <SidebarStatusIcon icon={topStatus.icon} /> : null}
+              </span>
+            ) : (
+              <span
+                className={cn(
+                  "flex shrink-0 items-center transition-opacity",
+                  (!props.isActive || variantAction === "unsettle") &&
+                    "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
+                )}
+              >
+                {props.project ? (
+                  <ProjectFavicon project={props.project} className="size-4" />
+                ) : null}
+              </span>
+            )}
             {draftIndicator}
             {title}
             {launchGroupToggle}
@@ -2889,23 +2990,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                             topStatus.className,
                           )}
                         >
-                          {topStatus.icon === "working" ? (
-                            <CircleDashedIcon aria-hidden className="size-4 shrink-0" />
-                          ) : topStatus.icon === "waiting" ? (
-                            <CircleDotDashedIcon aria-hidden className="size-4 shrink-0" />
-                          ) : topStatus.icon === "input" ? (
-                            <MessageCircleQuestionIcon aria-hidden className="size-4 shrink-0" />
-                          ) : topStatus.icon === "approval" ? (
-                            <ShieldQuestionIcon aria-hidden className="size-4 shrink-0" />
-                          ) : topStatus.icon === "failed" ? (
-                            <CircleAlertIcon aria-hidden className="size-4 shrink-0" />
-                          ) : topStatus.icon === "done" ? (
-                            <CircleCheckIcon aria-hidden className="size-4 shrink-0" />
-                          ) : topStatus.icon === "plan" ? (
-                            <ListChecksIcon aria-hidden className="size-4 shrink-0" />
-                          ) : topStatus.icon === "orchestrator" ? (
-                            <CornerLeftUpIcon aria-hidden className="size-4 shrink-0" />
-                          ) : null}
+                          <SidebarStatusIcon icon={topStatus.icon} />
                           {/* The label alone is the live region: a role="status"
                             wrapper around the ticking duration would make
                             screen readers announce every second. */}
@@ -3066,6 +3151,10 @@ function latestRunDiff(
 
 const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   isSettled: boolean;
+  // FORK: a matching subagent sits under its parents; a parent that does not
+  // match itself is there as context.
+  depth: number;
+  isContext: boolean;
   thread: SidebarThreadSummary;
   project: EnvironmentProject | null;
   projectDisplayName: string | null;
@@ -3142,8 +3231,14 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
     window.addEventListener("dragend", clearFileDrag);
     return () => window.removeEventListener("dragend", clearFileDrag);
   }, [isFileDragOver]);
+  const isMuted = props.isSettled || props.isContext;
   return (
-    <li role="presentation" className="list-none" {...fileDropHandlers}>
+    <li
+      role="presentation"
+      className={cn("list-none", props.depth > 0 && "border-l border-sidebar-border pl-1")}
+      style={props.depth > 0 ? { marginLeft: `${props.depth * 0.75}rem` } : undefined}
+      {...fileDropHandlers}
+    >
       <Tooltip>
         <TooltipTrigger
           render={
@@ -3176,7 +3271,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
               project={props.project}
               className={cn(
                 "size-4 shrink-0 transition-opacity",
-                props.isSettled &&
+                isMuted &&
                   !props.isRouteActive &&
                   !props.isHighlighted &&
                   "opacity-40 grayscale group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
@@ -3188,7 +3283,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate",
-                  props.isSettled
+                  isMuted
                     ? "font-normal text-secondary-label/70 group-hover/sidebar-row:text-foreground"
                     : "font-medium text-foreground",
                   (props.isHighlighted || props.isRouteActive) && "text-foreground",
@@ -3549,6 +3644,7 @@ export default function Sidebar() {
     visibleShelvedThreads,
     visibleWorkingThreads,
     workingFamilyByKey,
+    launchForest,
     launchRowsByRootKey,
     launcherByKey,
     launchGroupByKey,
@@ -3579,11 +3675,17 @@ export default function Sidebar() {
   const threadSearchMatchByKey = new Map(
     threadSearch.matches.map((match) => [threadSearchMatchKey(match), match] as const),
   );
-  const threadSearchResults = searchSidebarThreads(
-    searchableThreads,
-    threadSearchQuery,
-    new Set(threadSearchMatchByKey.keys()),
-  );
+  // FORK: a matching subagent shows under its parents, which come along as context.
+  const threadSearchRows = nestSidebarSearchResults({
+    matches: searchSidebarThreads(
+      searchableThreads,
+      threadSearchQuery,
+      new Set(threadSearchMatchByKey.keys()),
+    ),
+    threads: searchableThreads,
+    forest: launchForest,
+  });
+  const threadSearchResults = threadSearchRows.map((row) => row.thread);
   const threadSearchResultOrderKey = threadSearchResults
     .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)))
     .join("\0");
@@ -3747,19 +3849,30 @@ export default function Sidebar() {
     })();
   };
 
+  // FORK: subagent rows follow their parent, so they never join a selection
+  // or take a parked thread's place on screen.
+  const isSubagentRowKey = (key: string) => {
+    const thread = threadByKeyRef.current.get(key);
+    return thread !== undefined && isSidebarSubagentThread(thread);
+  };
+
   const handleThreadClick = (event: ReactMouseEvent, threadRef: ScopedThreadRef) => {
     if (isSidebarNestedLinkClick(event.target)) return;
     const isMac = isMacPlatform(navigator.platform);
     const isModClick = isMac ? event.metaKey : event.ctrlKey;
     const threadKey = scopedThreadKey(threadRef);
-    if (isModClick) {
+    const selectable = !isSubagentRowKey(threadKey);
+    if (isModClick && selectable) {
       event.preventDefault();
       toggleThreadSelection(threadKey);
       return;
     }
-    if (event.shiftKey) {
+    if (event.shiftKey && selectable) {
       event.preventDefault();
-      rangeSelectTo(threadKey, orderedThreadKeysRef.current);
+      rangeSelectTo(
+        threadKey,
+        orderedThreadKeysRef.current.filter((key) => !isSubagentRowKey(key)),
+      );
       return;
     }
     if (isTrailingDoubleClick(event.detail)) {
@@ -3784,7 +3897,11 @@ export default function Sidebar() {
       currentIndex === -1
         ? null
         : ([...orderedKeys.slice(currentIndex + 1), ...orderedKeys.slice(0, currentIndex)].find(
-            (key) => !settledKeys.has(key) && !snoozedKeys.has(key) && !coParkingKeys?.has(key),
+            (key) =>
+              !settledKeys.has(key) &&
+              !snoozedKeys.has(key) &&
+              !coParkingKeys?.has(key) &&
+              !isSubagentRowKey(key),
           ) ?? null);
     const nextThread = nextCardKey ? threadByKeyRef.current.get(nextCardKey) : null;
     return nextThread
@@ -4779,18 +4896,18 @@ export default function Sidebar() {
           thread.worktreePath ??
           projectByKey.get(`${thread.environmentId}:${thread.projectId}`)?.workspaceRoot ??
           null;
-        const supportsSettlement =
-          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement ===
-          true;
-        const supportsSnooze =
-          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
-        const supportsPinning =
-          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadPinning === true;
-        const supportsShelf =
-          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadShelf === true;
-        const supportsAutoSettleOptOut =
-          serverConfigs.get(thread.environmentId)?.environment.capabilities
-            .threadAutoSettleOptOut === true;
+        // FORK: a subagent follows its parent: where it sits, when it settles
+        // and whether it stays are the parent's, so its menu keeps renaming,
+        // reading and copying.
+        const isSubagent = isSidebarSubagentThread(thread);
+        const placeCapabilities = isSubagent
+          ? undefined
+          : serverConfigs.get(thread.environmentId)?.environment.capabilities;
+        const supportsSettlement = placeCapabilities?.threadSettlement === true;
+        const supportsSnooze = placeCapabilities?.threadSnooze === true;
+        const supportsPinning = placeCapabilities?.threadPinning === true;
+        const supportsShelf = placeCapabilities?.threadShelf === true;
+        const supportsAutoSettleOptOut = placeCapabilities?.threadAutoSettleOptOut === true;
         const supportsTitleRegeneration =
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true;
@@ -4838,7 +4955,7 @@ export default function Sidebar() {
                 titleRegeneration: supportsTitleRegeneration,
               },
               snoozePresets,
-            }),
+            }).filter((item) => !isSubagent || (item.id !== "archive" && item.id !== "delete")),
             position,
           ),
         );
@@ -5318,13 +5435,15 @@ export default function Sidebar() {
                   aria-label="Thread search results"
                   className="flex flex-col gap-px"
                 >
-                  {threadSearchResults.map((thread, index) => {
+                  {threadSearchRows.map(({ thread, depth, isContext }, index) => {
                     const threadKey = scopedThreadKey(
                       scopeThreadRef(thread.environmentId, thread.id),
                     );
                     return (
                       <SidebarSearchResultRow
                         isSettled={settledThreadKeys.has(threadKey)}
+                        depth={depth}
+                        isContext={isContext}
                         key={threadKey}
                         thread={thread}
                         project={
@@ -5412,11 +5531,19 @@ export default function Sidebar() {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
                         );
+                        // FORK: a subagent sits where its parent does (`section`
+                        // is the parent's), so it gets no pin, snooze, settle or
+                        // shelf of its own, and always a slim row.
+                        const isSubagent = launchDepth > 0 && isSidebarSubagentThread(thread);
                         const isCard =
-                          section === "active" || section === "pinned" || section === "working";
+                          !isSubagent &&
+                          (section === "active" || section === "pinned" || section === "working");
                         const rowVariant = isCard ? "card" : "slim";
                         const ThreadRow =
                           launchDepth > 0 ? NestedSidebarThreadRow : SortableThreadRow;
+                        const capabilities = isSubagent
+                          ? undefined
+                          : serverConfigs.get(thread.environmentId)?.environment.capabilities;
                         return (
                           <ThreadRow
                             key={threadKey}
@@ -5431,30 +5558,22 @@ export default function Sidebar() {
                             thread={thread}
                             variant={rowVariant}
                             variantAction={
-                              section === "snoozed"
-                                ? "unsnooze"
-                                : section === "shelved"
-                                  ? "unshelve"
-                                  : section === "settled"
-                                    ? "unsettle"
-                                    : "settle"
+                              isSubagent
+                                ? section === "settled" || section === "shelved"
+                                  ? "unsettle"
+                                  : "settle"
+                                : section === "snoozed"
+                                  ? "unsnooze"
+                                  : section === "shelved"
+                                    ? "unshelve"
+                                    : section === "settled"
+                                      ? "unsettle"
+                                      : "settle"
                             }
-                            settlementSupported={
-                              serverConfigs.get(thread.environmentId)?.environment.capabilities
-                                .threadSettlement === true
-                            }
-                            snoozeSupported={
-                              serverConfigs.get(thread.environmentId)?.environment.capabilities
-                                .threadSnooze === true
-                            }
-                            shelfSupported={
-                              serverConfigs.get(thread.environmentId)?.environment.capabilities
-                                .threadShelf === true
-                            }
-                            pinningSupported={
-                              serverConfigs.get(thread.environmentId)?.environment.capabilities
-                                .threadPinning === true
-                            }
+                            settlementSupported={capabilities?.threadSettlement === true}
+                            snoozeSupported={capabilities?.threadSnooze === true}
+                            shelfSupported={capabilities?.threadShelf === true}
+                            pinningSupported={capabilities?.threadPinning === true}
                             isPinned={thread.pinnedAt != null}
                             dropVerb={
                               dragState?.activeKey === threadKey
@@ -5521,7 +5640,7 @@ export default function Sidebar() {
                             onUnshelve={attemptUnshelve}
                             onUnpin={attemptUnpin}
                             onAcknowledgeWoke={acknowledgeWoke}
-                            onFileDropThreads={handleThreadFileDrop}
+                            onFileDropThreads={isSubagent ? undefined : handleThreadFileDrop}
                             launchDepth={launchDepth}
                             launcherTitle={launcherByKey.get(threadKey)?.title ?? null}
                             launcherStatus={launcherByKey.get(threadKey)?.status ?? null}
@@ -5529,6 +5648,7 @@ export default function Sidebar() {
                             launchGroupExpanded={isLaunchGroupExpanded(threadKey)}
                             onToggleLaunchGroup={toggleLaunchGroup}
                             workingFamily={workingFamilyByKey.get(threadKey) ?? NO_WORKING_FAMILY}
+                            isSubagent={isSubagent}
                           />
                         );
                       };

@@ -3,13 +3,18 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadFixture, type ThreadFixtureOverrides } from "../test-fixtures";
 import type { Thread } from "../types";
+import { resolveSidebarThreadStatus } from "./Sidebar.logic";
 import {
   flattenSidebarLaunchGroup,
+  isSidebarLaunchChildShown,
   isSidebarLaunchGroupExpanded,
   isSidebarMoveUnread,
   liftSidebarMoveState,
   nestSidebarLaunchedThreads,
+  nestSidebarSearchResults,
+  readSidebarLaunchGroupChoices,
   resolveSidebarFamilyStatus,
+  resolveSidebarLaunchGroupDefaults,
   resolveSidebarLauncherKey,
   resolveSidebarMoveRecede,
   resolveSidebarMoveState,
@@ -17,6 +22,7 @@ import {
   sidebarThreadHoldsInbox,
   summarizeSidebarLaunchGroup,
   toggleSidebarLaunchGroup,
+  type SidebarLaunchGroupDefault,
   type SidebarLaunchGroupMember,
   type SidebarLaunchSections,
 } from "./SidebarLaunches.logic";
@@ -38,6 +44,17 @@ function launched(id: string, by: string, overrides: ThreadFixtureOverrides = {}
   return thread(id, { launchedByThreadId: ThreadId.make(by), ...overrides });
 }
 
+function subagentOf(id: string, parent: string, overrides: ThreadFixtureOverrides = {}): Thread {
+  return thread(id, {
+    lineage: {
+      rootThreadId: ThreadId.make(parent),
+      parentThreadId: ThreadId.make(parent),
+      relationshipToParent: "subagent",
+    },
+    ...overrides,
+  });
+}
+
 const key = (id: string) => sidebarLaunchThreadKey({ environmentId, id: ThreadId.make(id) });
 
 function byKey(threads: readonly Thread[]) {
@@ -57,7 +74,11 @@ function sections(
   };
 }
 
-function nest(input: SidebarLaunchSections<Thread>, extra: readonly Thread[] = []) {
+function nest(
+  input: SidebarLaunchSections<Thread>,
+  extra: readonly Thread[] = [],
+  subagents?: readonly Thread[],
+) {
   const all = [
     ...input.pinned,
     ...input.active,
@@ -66,11 +87,13 @@ function nest(input: SidebarLaunchSections<Thread>, extra: readonly Thread[] = [
     ...input.shelved,
     ...input.settled,
     ...extra,
+    ...(subagents ?? []),
   ];
   return nestSidebarLaunchedThreads({
     sections: input,
     threadByKey: byKey(all),
     holdsInbox: sidebarThreadHoldsInbox,
+    subagents,
   });
 }
 
@@ -233,32 +256,18 @@ describe("collapsed launch groups", () => {
   const other = launched("other", "orchestrator", { createdAt: "2026-10-09T11:00:00.000Z" });
   const { forest } = nest(sections({ active: [orchestrator, writer, reviewer, other] }));
 
-  it("stores only the groups toggled away from the default", () => {
-    const toggled = toggleSidebarLaunchGroup([], key("orchestrator"));
-    expect(toggled).toEqual([key("orchestrator")]);
-    expect(toggleSidebarLaunchGroup(toggled, key("orchestrator"))).toEqual([]);
-    const toggledKeys = new Set(toggled);
+  it("opens launch groups by default and remembers only a fold", () => {
+    const folded = toggleSidebarLaunchGroup([], key("orchestrator"), "all");
+    expect(folded).toEqual([key("orchestrator")]);
+    const choices = readSidebarLaunchGroupChoices(folded);
     expect(
-      isSidebarLaunchGroupExpanded({
-        parentKey: key("orchestrator"),
-        toggledKeys,
-        expandedByDefault: true,
-      }),
+      isSidebarLaunchGroupExpanded({ choice: choices.get(key("orchestrator")), byDefault: "all" }),
     ).toBe(false);
     expect(
-      isSidebarLaunchGroupExpanded({
-        parentKey: key("orchestrator"),
-        toggledKeys,
-        expandedByDefault: false,
-      }),
+      isSidebarLaunchGroupExpanded({ choice: choices.get(key("writer")), byDefault: "all" }),
     ).toBe(true);
-    expect(
-      isSidebarLaunchGroupExpanded({
-        parentKey: key("writer"),
-        toggledKeys,
-        expandedByDefault: true,
-      }),
-    ).toBe(true);
+    // Opening it again is what it does by itself, so the choice is dropped.
+    expect(toggleSidebarLaunchGroup(folded, key("orchestrator"), "all")).toEqual([]);
   });
 
   it("lists an expanded group depth-first with depths", () => {
@@ -266,7 +275,7 @@ describe("collapsed launch groups", () => {
       flattenSidebarLaunchGroup({
         rootKey: key("orchestrator"),
         forest,
-        isExpanded: () => true,
+        isShown: () => true,
         routeThreadKey: null,
       }),
     ).toEqual([
@@ -281,7 +290,7 @@ describe("collapsed launch groups", () => {
       flattenSidebarLaunchGroup({
         rootKey: key("orchestrator"),
         forest,
-        isExpanded: () => false,
+        isShown: () => false,
         routeThreadKey: null,
       }),
     ).toEqual([]);
@@ -289,12 +298,229 @@ describe("collapsed launch groups", () => {
       flattenSidebarLaunchGroup({
         rootKey: key("orchestrator"),
         forest,
-        isExpanded: () => false,
+        isShown: () => false,
         routeThreadKey: key("reviewer"),
       }),
     ).toEqual([
       { key: key("writer"), depth: 1 },
       { key: key("reviewer"), depth: 2 },
+    ]);
+  });
+});
+
+describe("subagents in the forest", () => {
+  const working = { ...runtime, status: "running" as const };
+
+  it("nests each subagent under its parent wherever that sits, its own subagents one level deeper", () => {
+    const orchestrator = thread("orchestrator");
+    const writer = launched("writer", "orchestrator");
+    const settledParent = thread("settled-parent");
+    const explore = subagentOf("explore", "orchestrator");
+    const nested = subagentOf("nested", "explore");
+    const writerHelper = subagentOf("writer-helper", "writer");
+    const busyUnderSettled = subagentOf("busy-under-settled", "settled-parent", {
+      runtime: working,
+    });
+
+    const result = nest(
+      sections({ active: [orchestrator, writer], settled: [settledParent] }),
+      [],
+      [explore, nested, writerHelper, busyUnderSettled],
+    );
+
+    expect(ids(result.sections.active)).toEqual(["orchestrator"]);
+    expect(ids(result.sections.settled)).toEqual(["settled-parent"]);
+    expect(result.forest.parentKeyByChildKey.get(key("explore"))).toBe(key("orchestrator"));
+    expect(result.forest.parentKeyByChildKey.get(key("nested"))).toBe(key("explore"));
+    expect(result.forest.parentKeyByChildKey.get(key("writer-helper"))).toBe(key("writer"));
+    expect(result.forest.subagentKeys).toEqual(
+      new Set([key("explore"), key("nested"), key("writer-helper"), key("busy-under-settled")]),
+    );
+    expect(result.forest.subagentKeys.has(key("writer"))).toBe(false);
+    // A subagent takes its parent's place, not one of its own.
+    expect(result.nestedSectionByKey.get(key("nested"))).toBe("active");
+    expect(result.nestedSectionByKey.get(key("busy-under-settled"))).toBe("settled");
+    expect(result.nestedThreadByKey.get(key("nested"))).toBe(nested);
+  });
+
+  it("never makes a subagent a root: without a parent row it stays hidden", () => {
+    const visible = thread("visible");
+    const outOfScope = thread("out-of-scope");
+    const result = nest(
+      sections({ active: [visible] }),
+      [outOfScope],
+      [
+        subagentOf("scoped-out", "out-of-scope"),
+        subagentOf("orphan", "deleted"),
+        subagentOf("orphan-child", "orphan"),
+        subagentOf("loop-a", "loop-b"),
+        subagentOf("loop-b", "loop-a"),
+      ],
+    );
+    expect(ids(result.sections.active)).toEqual(["visible"]);
+    expect(result.forest.parentKeyByChildKey.size).toBe(0);
+    expect(result.nestedThreadByKey.size).toBe(0);
+  });
+
+  it("does not pull a working parent back into the inbox for its subagent's question", () => {
+    const parent = thread("parent", { runtime: working });
+    const asking = subagentOf("asking", "parent", { hasPendingUserInput: true });
+    const result = nest(sections({ working: [parent] }), [], [asking]);
+    expect(ids(result.sections.working)).toEqual(["parent"]);
+  });
+});
+
+describe("subagent groups", () => {
+  const working = { ...runtime, status: "running" as const };
+  const parentIds = ["idle", "busy", "asking", "mixed", "mixed-busy", "launcher"];
+  const children = [
+    subagentOf("idle-1", "idle"),
+    subagentOf("idle-2", "idle"),
+    subagentOf("busy-1", "busy"),
+    subagentOf("busy-2", "busy", { runtime: working }),
+    subagentOf("asking-1", "asking", { hasPendingApprovals: true }),
+    subagentOf("mixed-1", "mixed"),
+    launched("mixed-writer", "mixed"),
+    subagentOf("mixed-busy-1", "mixed-busy", { hasPendingUserInput: true }),
+    launched("mixed-busy-writer", "mixed-busy"),
+    launched("writer", "launcher"),
+  ];
+  const isSubagent = (candidate: Thread) => candidate.lineage.relationshipToParent === "subagent";
+  const { forest } = nest(
+    sections({
+      active: [...parentIds.map((id) => thread(id)), ...children.filter((c) => !isSubagent(c))],
+    }),
+    [],
+    children.filter(isSubagent),
+  );
+  const childByKey = byKey(children);
+  const defaults = resolveSidebarLaunchGroupDefaults({
+    forest,
+    subagentStatus: (childKey) => {
+      const child = childByKey.get(childKey);
+      return child === undefined ? null : resolveSidebarThreadStatus(child);
+    },
+  });
+  const byDefault = (parent: string): SidebarLaunchGroupDefault =>
+    defaults.byParentKey.get(key(parent)) ?? "all";
+  const shown = (child: string, choice?: boolean) =>
+    isSidebarLaunchChildShown({
+      choice,
+      isSubagent: forest.subagentKeys.has(key(child)),
+      isBusy: defaults.busySubagentKeys.has(key(child)),
+    });
+
+  it("shows only busy subagents by itself; launched threads stay open", () => {
+    expect(Object.fromEntries(parentIds.map((id) => [id, byDefault(id)]))).toEqual({
+      idle: "none",
+      busy: "some",
+      asking: "all",
+      mixed: "some",
+      "mixed-busy": "all",
+      launcher: "all",
+    });
+    expect(shown("idle-1")).toBe(false);
+    expect(shown("busy-2")).toBe(true);
+    expect(shown("busy-1")).toBe(false);
+    expect(shown("asking-1")).toBe(true);
+    expect(shown("mixed-writer")).toBe(true);
+    expect(shown("mixed-1")).toBe(false);
+    // A group showing part of itself reads as folded, so its toggle opens the rest.
+    expect(isSidebarLaunchGroupExpanded({ choice: undefined, byDefault: "some" })).toBe(false);
+    expect(isSidebarLaunchGroupExpanded({ choice: undefined, byDefault: "all" })).toBe(true);
+    expect(isSidebarLaunchGroupExpanded({ choice: undefined, byDefault: "none" })).toBe(false);
+  });
+
+  it("shows every subagent, finished ones too, in a group opened by hand", () => {
+    expect(shown("busy-1", true)).toBe(true);
+    expect(shown("idle-1", true)).toBe(true);
+    expect(shown("busy-2", false)).toBe(false);
+    expect(shown("mixed-writer", false)).toBe(false);
+  });
+
+  it("remembers a manual toggle over the automatic state, until it is the automatic state", () => {
+    const parent = key("parent");
+    // Opening a folded or partly shown group by hand is remembered.
+    for (const state of ["none", "some"] as const) {
+      expect(toggleSidebarLaunchGroup([], parent, state)).toEqual([`+${parent}`]);
+    }
+    const opened = [`+${parent}`];
+    const openedChoice = readSidebarLaunchGroupChoices(opened).get(parent);
+    for (const state of ["none", "some", "all"] as const) {
+      expect(isSidebarLaunchGroupExpanded({ choice: openedChoice, byDefault: state })).toBe(true);
+    }
+    // Folding it while a subagent works sticks, for the next busy one too.
+    expect(toggleSidebarLaunchGroup(opened, parent, "some")).toEqual([parent]);
+    // Folding it back while its subagents are idle hands it back to them.
+    expect(toggleSidebarLaunchGroup(opened, parent, "none")).toEqual([]);
+
+    // A fully shown group (launched threads only, or every subagent busy) folds
+    // by hand and opens again to the automatic state.
+    const folded = toggleSidebarLaunchGroup([], parent, "all");
+    expect(folded).toEqual([parent]);
+    const foldedChoice = readSidebarLaunchGroupChoices(folded).get(parent);
+    expect(isSidebarLaunchGroupExpanded({ choice: foldedChoice, byDefault: "all" })).toBe(false);
+    expect(toggleSidebarLaunchGroup(folded, parent, "all")).toEqual([]);
+  });
+
+  it("keeps the open subagent and its path in a folded group", () => {
+    const parent = thread("parent");
+    const { forest: own } = nest(
+      sections({ active: [parent] }),
+      [],
+      [subagentOf("first", "parent"), subagentOf("second", "parent"), subagentOf("deep", "second")],
+    );
+    expect(
+      flattenSidebarLaunchGroup({
+        rootKey: key("parent"),
+        forest: own,
+        isShown: () => false,
+        routeThreadKey: key("deep"),
+      }),
+    ).toEqual([
+      { key: key("second"), depth: 1 },
+      { key: key("deep"), depth: 2 },
+    ]);
+  });
+});
+
+describe("nestSidebarSearchResults", () => {
+  const orchestrator = thread("orchestrator");
+  const other = thread("other");
+  const explore = subagentOf("explore", "orchestrator");
+  const deep = subagentOf("deep", "explore");
+  const sibling = subagentOf("sibling", "orchestrator");
+  const all = [orchestrator, other, explore, deep, sibling];
+  const { forest } = nest(
+    sections({ active: [orchestrator, other] }),
+    [],
+    [explore, deep, sibling],
+  );
+  const search = (matches: readonly Thread[]) =>
+    nestSidebarSearchResults({ matches, threads: all, forest }).map(
+      (row) => `${row.thread.id}:${row.depth}${row.isContext ? ":context" : ""}`,
+    );
+
+  it("keeps results as they are when no subagent matches", () => {
+    expect(search([other, orchestrator])).toEqual(["other:0", "orchestrator:0"]);
+  });
+
+  it("shows a matching subagent under its parents, which come along as context", () => {
+    expect(search([other, deep])).toEqual([
+      "other:0",
+      "orchestrator:0:context",
+      "explore:1:context",
+      "deep:2",
+    ]);
+  });
+
+  it("lets a matching parent keep the place its subagent gave it, once", () => {
+    expect(search([sibling, deep, other, orchestrator])).toEqual([
+      "orchestrator:0",
+      "explore:1:context",
+      "deep:2",
+      "sibling:1",
+      "other:0",
     ]);
   });
 });
@@ -505,6 +731,28 @@ describe("launch group summary and the lift to the parent", () => {
     );
     const calm = summarizeSidebarLaunchGroup([member({ status: "working" })]);
     expect(liftSidebarMoveState(working, calm)).toBe(working);
+  });
+
+  it("counts subagents only while they work or ask, and lifts none of them", () => {
+    const summary = summarizeSidebarLaunchGroup([
+      member({ title: "Writer" }),
+      member({ title: "Explore", status: "working", subagent: true }),
+      member({ title: "Finished", isUnread: true, subagent: true }),
+      member({ title: "Broke", status: "failed", subagent: true }),
+      member({ title: "Asks", status: "approval", subagent: true }),
+    ]);
+    expect(summary).toMatchObject({
+      count: 5,
+      mostUrgent: "needs-you",
+      tooltip: "1 launched thread and 4 subagents: 1 needs you, 1 working, 1 with orchestrator",
+    });
+    expect(summary?.needsYou).toEqual([]);
+    expect(
+      summarizeSidebarLaunchGroup([
+        member({ subagent: true }),
+        member({ status: "failed", subagent: true }),
+      ]),
+    ).toMatchObject({ count: 2, mostUrgent: null, tooltip: "2 subagents" });
   });
 
   it("recedes rows waiting on another agent, never a row that needs the user", () => {
