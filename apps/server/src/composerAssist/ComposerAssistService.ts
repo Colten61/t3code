@@ -607,6 +607,7 @@ export const make = Effect.gen(function* () {
           blankTask({
             text: input.text.replace(/\s+$/, ""),
             thread,
+            answeringQuestion: input.answeringQuestion,
             language: settings.language === "" ? null : settings.language,
           }),
           BLANK_TIMEOUT_MS,
@@ -661,6 +662,7 @@ export const make = Effect.gen(function* () {
           assistant,
           cuesTask({
             text,
+            answeringQuestion: input.answeringQuestion,
             kinds,
             audit: settings.auditor,
             decisions,

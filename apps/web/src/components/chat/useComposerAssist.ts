@@ -3,6 +3,7 @@
 // their spans. An answer for a draft that has changed since is dropped, never applied.
 import {
   composerAssistAnswer,
+  composerAssistQuestionContext,
   composerBlankOutcome,
   composerBlankTooLong,
   composerDraftCues,
@@ -21,6 +22,7 @@ import {
   type ProjectId,
   type ProviderInstanceId,
   type ThreadId,
+  type UserInputQuestion,
 } from "@t3tools/contracts";
 import { useEffect, useRef, useState } from "react";
 
@@ -36,8 +38,8 @@ export type ComposerAssistStatus =
   | { readonly kind: "working" }
   | { readonly kind: "note"; readonly text: string };
 
-const assistDraftOf = (draft: string) =>
-  toComposerAssistDraft(draft, collectComposerPromptInlineTokens(draft));
+const assistDraftOf = (draft: string, literal: boolean) =>
+  toComposerAssistDraft(draft, literal ? [] : collectComposerPromptInlineTokens(draft));
 
 export function useComposerAssist(input: {
   readonly environmentId: EnvironmentId;
@@ -46,9 +48,20 @@ export function useComposerAssist(input: {
   readonly instanceId: ProviderInstanceId | null;
   readonly prompt: string;
   readonly promptRef: { readonly current: string };
-  /** False while the composer answers a question or cannot send. */
+  readonly draftKey: string;
+  readonly answer?: {
+    readonly requestId: string;
+    readonly question: Pick<
+      UserInputQuestion,
+      "id" | "question" | "options" | "initialAnswer" | "allowCustomAnswer"
+    >;
+    readonly text: string;
+  } | null;
+  /** False while the visible editor cannot be changed. */
   readonly active: boolean;
-  readonly editorRef: { readonly current: ComposerPromptEditorHandle | null };
+  readonly editorRef: {
+    readonly current: Pick<ComposerPromptEditorHandle, "showAssistCues"> | null;
+  };
   /** Replaces the whole draft if it still reads `expected`. */
   readonly replaceDraft: (expected: string, next: string) => boolean;
 }): ComposerAssistStatus | null {
@@ -56,7 +69,20 @@ export function useComposerAssist(input: {
   const supported =
     useServerConfigs().get(input.environmentId)?.environment.capabilities?.composerAssist === true;
   const permitted = useEnvironmentScope(input.environmentId, AuthOrchestrationOperateScope);
-  const enabled = supported && permitted && input.active;
+  const enabled =
+    supported && permitted && input.active && input.answer?.question.allowCustomAnswer !== false;
+  const draft = input.answer?.text ?? input.prompt;
+  const draftKey = JSON.stringify([
+    input.environmentId,
+    input.threadId,
+    input.draftKey,
+    input.answer?.requestId,
+    input.answer?.question.id,
+  ]);
+  const literal = input.answer?.question.initialAnswer !== undefined;
+  const answeringQuestion = input.answer
+    ? composerAssistQuestionContext(input.answer.question)
+    : undefined;
   const wantsCues =
     settings.contradictions ||
     settings.spelling ||
@@ -65,7 +91,7 @@ export function useComposerAssist(input: {
     settings.auditor;
   const askAssist = useAtomCommand(serverEnvironment.composerAssist, { reportFailure: false });
   const [status, setStatus] = useState<ComposerAssistStatus | null>(null);
-  const previousPromptRef = useRef(input.prompt);
+  const previousPromptRef = useRef({ draft, key: draftKey });
   const answerCountRef = useRef(0);
   // The latest values for the async work below, which outlives a render.
   const latest = useRef(input);
@@ -75,20 +101,23 @@ export function useComposerAssist(input: {
 
   useEffect(() => {
     const previous = previousPromptRef.current;
-    const draft = input.prompt;
-    previousPromptRef.current = draft;
-    if (previous === draft) return;
-    // A note answers the draft it was about; the next edit clears it.
-    setStatus((current) => (current?.kind === "note" ? null : current));
-    if (!enabled) return;
+    previousPromptRef.current = { draft, key: draftKey };
+    setStatus(null);
+    if (previous.key !== draftKey || !enabled) {
+      latest.current.editorRef.current?.showAssistCues(draft, []);
+      return;
+    }
+    if (previous.draft === draft) return;
+    let current = true;
     const target = {
       ...(input.threadId === null ? {} : { threadId: input.threadId }),
       ...(input.projectId === null ? {} : { projectId: input.projectId }),
       ...(input.instanceId === null ? {} : { instanceId: input.instanceId }),
+      ...(answeringQuestion === undefined ? {} : { answeringQuestion }),
     };
 
-    if (settings.blanks && isTypedComposerBlank(previous, draft)) {
-      const assist = assistDraftOf(draft);
+    if (settings.blanks && isTypedComposerBlank(previous.draft, draft)) {
+      const assist = assistDraftOf(draft, literal);
       latest.current.editorRef.current?.showAssistCues(draft, []);
       if (composerBlankTooLong(assist)) {
         setStatus({ kind: "note", text: "The draft is too long for a blank." });
@@ -99,6 +128,7 @@ export function useComposerAssist(input: {
         environmentId: input.environmentId,
         input: { operation: "blank", ...target, text: assist.text },
       }).then((result) => {
+        if (!current) return;
         setStatus((current) => (current?.kind === "working" ? null : current));
         if (result._tag === "Failure") {
           if (isAtomCommandInterrupted(result)) return;
@@ -121,7 +151,9 @@ export function useComposerAssist(input: {
           });
         }
       });
-      return;
+      return () => {
+        current = false;
+      };
     }
 
     if (!wantsCues) return;
@@ -131,7 +163,7 @@ export function useComposerAssist(input: {
     }
     const timer = window.setTimeout(() => {
       if (latest.current.promptRef.current !== draft) return;
-      const assist = assistDraftOf(draft);
+      const assist = assistDraftOf(draft, literal);
       void askAssist({
         environmentId: input.environmentId,
         input: { operation: "cues", ...target, text: assist.text },
@@ -139,7 +171,7 @@ export function useComposerAssist(input: {
         // Cues are optional: a failed check just shows nothing.
         const answer =
           result._tag === "Failure" ? null : composerAssistAnswer(result.value, "cues");
-        if (answer === null || latest.current.promptRef.current !== draft) return;
+        if (!current || answer === null || latest.current.promptRef.current !== draft) return;
         answerCountRef.current += 1;
         latest.current.editorRef.current?.showAssistCues(
           draft,
@@ -153,19 +185,24 @@ export function useComposerAssist(input: {
         }
       });
     }, settings.pauseMs);
-    return () => window.clearTimeout(timer);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
   }, [
     askAssist,
+    answeringQuestion,
+    draft,
+    draftKey,
     enabled,
     input.environmentId,
     input.instanceId,
     input.projectId,
-    input.prompt,
     input.threadId,
-    settings.blanks,
-    settings.pauseMs,
+    literal,
+    settings,
     wantsCues,
   ]);
 
-  return status;
+  return enabled ? status : null;
 }

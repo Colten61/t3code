@@ -1455,6 +1455,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                         draftMessage={props.draftMessage}
                         draftAttachments={props.draftAttachments}
                         placeholder="Ask the repo agent, or run a command…"
+                        isVisible={!composerSlotHidden}
                         contentMaxWidth={contentMaxWidth}
                         connectionState={props.connectionStateLabel}
                         environmentLabel={props.environmentLabel}

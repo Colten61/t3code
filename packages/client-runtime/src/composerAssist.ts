@@ -9,6 +9,7 @@ import {
   type ModelSelection,
   ProviderInstanceId,
   type ServerProvider,
+  type UserInputQuestion,
 } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { collectAssistantCitations } from "@t3tools/shared/assistantCitations";
@@ -93,6 +94,18 @@ export function wantsComposerCues(draft: string): boolean {
     draft.trim().length >= COMPOSER_ASSIST_MIN_CUE_CHARS &&
     draft.length <= COMPOSER_ASSIST_MAX_CUE_CHARS
   );
+}
+
+/** The question and its choices are context; only the answer draft is edited. */
+export function composerAssistQuestionContext(
+  question: Pick<UserInputQuestion, "question" | "options">,
+): string {
+  const choices = question.options.map((option) =>
+    option.description && option.description !== option.label
+      ? `${option.label}: ${option.description}`
+      : option.label,
+  );
+  return [question.question, ...choices].join("\n").slice(0, COMPOSER_ASSIST_MAX_DRAFT_CHARS);
 }
 
 export interface ComposerAssistDraft {

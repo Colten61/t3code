@@ -1123,7 +1123,7 @@ import {
   stepComposerPromptHistory,
   type ComposerPromptHistoryPosition,
 } from "./composerPromptHistory";
-import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
+import type { PendingUserInputDraftAnswer, PendingUserInputProgress } from "../../pendingUserInput";
 import type {
   LatestProposedPlanState,
   PendingApproval,
@@ -1598,18 +1598,10 @@ export interface ChatComposerProps {
   activePendingApproval: PendingApproval | null;
   pendingApprovals: PendingApproval[];
   pendingUserInputs: PendingUserInput[];
-  activePendingProgress: {
-    questionIndex: number;
-    isLastQuestion: boolean;
-    canAdvance: boolean;
-    customAnswer: string;
-    activeQuestion: {
-      id: string;
-      initialAnswer?: string | undefined;
-      multiSelect?: boolean | undefined;
-      allowCustomAnswer?: boolean | undefined;
-    } | null;
-  } | null;
+  activePendingProgress: Pick<
+    PendingUserInputProgress,
+    "questionIndex" | "isLastQuestion" | "canAdvance" | "customAnswer" | "activeQuestion"
+  > | null;
   activePendingResolvedAnswers: Record<string, unknown> | null;
   activePendingIsResponding: boolean;
   activePendingDraftAnswers: Record<string, PendingUserInputDraftAnswer>;
@@ -4024,7 +4016,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     instanceId: selectedInstanceId,
     prompt,
     promptRef,
-    active: !isLiteralPendingAnswer && activePendingUserInput === null && canOperateThread,
+    draftKey: composerDraftTargetKey,
+    answer:
+      activePendingUserInput && activePendingProgress?.activeQuestion
+        ? {
+            requestId: activePendingUserInput.requestId,
+            question: activePendingProgress.activeQuestion,
+            text: activePendingProgress.customAnswer,
+          }
+        : null,
+    active: canOperateThread && !isComposerApprovalState && !activePendingIsResponding,
     editorRef: composerEditorRef,
     replaceDraft: (expected, next) =>
       applyPromptReplacement(0, promptRef.current.length, next, { expectedText: expected }),

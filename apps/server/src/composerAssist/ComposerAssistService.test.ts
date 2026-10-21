@@ -395,6 +395,38 @@ describe("ComposerAssistService", () => {
     }),
   );
 
+  it.effect("keeps the pending question separate from the answer being rewritten", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const input = {
+        threadId,
+        text: "fix the crash in ⟦1⟧ _",
+        answeringQuestion: "Should we fix the crash or just document it?",
+      };
+      const result = yield* harness.service.blank(input);
+      assert.deepEqual(result, { _tag: "rewrite", text: "Fix the crash in ⟦1⟧." });
+      const task = taken(harness)[0]?.task ?? "";
+      assert.include(task, `<question>\n${input.answeringQuestion}\n</question>`);
+      assert.include(task, `<draft>\n${input.text}\n</draft>`);
+    }),
+  );
+
+  it.effect("gives cues the pending question without treating it as part of the draft", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ composerAssist: { contradictions: false } });
+      const input = {
+        threadId,
+        text: "Now push to origin/main please.",
+        answeringQuestion: "Which branch should receive the fix?",
+      };
+      const result = yield* harness.service.cues(input);
+      assert.isEmpty(result.cues);
+      const task = taken(harness)[0]?.task ?? "";
+      assert.include(task, `<question>\n${input.answeringQuestion}\n</question>`);
+      assert.include(task, `<draft>\n${input.text}\n</draft>`);
+    }),
+  );
+
   it.effect("refuses blanks the settings turned off, without asking Claude", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ composerAssist: { blanks: false } });

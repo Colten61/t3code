@@ -172,6 +172,9 @@ value filled in. To write in one language and send prompts in another, pick it i
 what you wrote. Files, skills and attachments in the draft stay; a rewrite that would
 lose one is refused, and a note says why whenever nothing changes.
 
+Assist also works while writing a custom answer to an agent's question. It uses the
+question as context and edits your answer. Questions in your draft stay questions.
+
 After a pause in typing, underlines point out:
 
 - a sentence that goes against a decision made in the thread, a rule in the

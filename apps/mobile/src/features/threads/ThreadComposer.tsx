@@ -150,6 +150,8 @@ export interface ThreadComposerProps {
   readonly draftMessage: string;
   readonly draftAttachments: ReadonlyArray<DraftComposerAttachment>;
   readonly placeholder: string;
+  /** A question can own the slot while this composer stays mounted. */
+  readonly isVisible: boolean;
   readonly contentMaxWidth?: number;
   readonly bottomInset?: number;
   readonly connectionState: RemoteClientConnectionState;
@@ -537,8 +539,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     instanceId: props.selectedThread.modelSelection.instanceId,
     serverConfig: props.serverConfig,
     draft: props.draftMessage,
+    draftKey: composerDraftKey,
     onChangeDraft: props.onChangeDraftMessage,
-    active: !voiceInput.freezesEditor,
+    active: props.isVisible && !voiceInput.freezesEditor,
   });
   const voicePresentation = resolveVoiceComposerPresentation(
     voiceInput.state,

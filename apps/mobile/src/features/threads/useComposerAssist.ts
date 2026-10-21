@@ -5,6 +5,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   composerAssistAnswer,
+  composerAssistQuestionContext,
   type ComposerDraftCue,
   composerBlankOutcome,
   composerBlankTooLong,
@@ -26,6 +27,7 @@ import type {
   ProviderInstanceId,
   ServerConfig,
   ThreadId,
+  UserInputQuestion,
 } from "@t3tools/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -52,7 +54,9 @@ export function useComposerAssist(input: {
   readonly serverConfig: ServerConfig | null;
   readonly draft: string;
   readonly onChangeDraft: (value: string) => void;
-  /** False while the composer answers a question or cannot send. */
+  readonly draftKey?: string;
+  readonly question?: UserInputQuestion;
+  /** False while the visible editor cannot be changed. */
   readonly active: boolean;
 }) {
   const settings = useAtomValue(
@@ -62,7 +66,22 @@ export function useComposerAssist(input: {
     serverEnvironment.composerAssist.permissionAtom(input.environmentId),
   );
   const supported = input.serverConfig?.environment.capabilities.composerAssist === true;
-  const enabled = supported && permitted && input.active && settings !== undefined;
+  const enabled =
+    supported &&
+    permitted &&
+    input.active &&
+    settings !== undefined &&
+    input.question?.allowCustomAnswer !== false;
+  const draftKey = JSON.stringify([
+    input.environmentId,
+    input.threadId,
+    input.draftKey,
+    input.question?.id,
+  ]);
+  const literal = input.question?.initialAnswer !== undefined;
+  const answeringQuestion = input.question
+    ? composerAssistQuestionContext(input.question)
+    : undefined;
   const wantsCues =
     settings !== undefined &&
     (settings.contradictions ||
@@ -73,7 +92,7 @@ export function useComposerAssist(input: {
   const askAssist = useAtomCommand(serverEnvironment.composerAssist, { reportFailure: false });
   const [status, setStatus] = useState<MobileComposerAssistStatus | null>(null);
   const [cues, setCues] = useState<ReadonlyArray<MobileComposerCue>>([]);
-  const previousDraftRef = useRef(input.draft);
+  const previousDraftRef = useRef({ draft: input.draft, key: draftKey });
   const latestDraftRef = useRef(input.draft);
   const answerCountRef = useRef(0);
   const onChangeDraftRef = useRef(input.onChangeDraft);
@@ -93,23 +112,31 @@ export function useComposerAssist(input: {
   useEffect(() => {
     const previous = previousDraftRef.current;
     const draft = input.draft;
-    previousDraftRef.current = draft;
-    if (previous === draft) return;
-    setCues((current) => (current.length === 0 ? current : relocateComposerCues(current, draft)));
+    previousDraftRef.current = { draft, key: draftKey };
     setStatus((current) =>
-      current?.kind === "note" || (current?.kind === "rewritten" && current.after !== draft)
-        ? null
-        : current,
+      enabled &&
+      previous.key === draftKey &&
+      current?.kind === "rewritten" &&
+      current.after === draft
+        ? current
+        : null,
     );
-    if (!enabled || settings === undefined) return;
+    if (previous.key !== draftKey || !enabled || settings === undefined) {
+      setCues(NO_CUES);
+      return;
+    }
+    if (previous.draft === draft) return;
+    setCues((current) => (current.length === 0 ? current : relocateComposerCues(current, draft)));
+    let current = true;
     const target = {
       threadId: input.threadId,
       projectId: input.projectId,
       instanceId: input.instanceId,
+      ...(answeringQuestion === undefined ? {} : { answeringQuestion }),
     };
 
-    if (settings.blanks && isTypedComposerBlank(previous, draft)) {
-      const assist = toComposerAssistDraft(draft);
+    if (settings.blanks && isTypedComposerBlank(previous.draft, draft)) {
+      const assist = literal ? toComposerAssistDraft(draft, []) : toComposerAssistDraft(draft);
       setCues([]);
       if (composerBlankTooLong(assist)) {
         setStatus({ kind: "note", text: "The draft is too long for a blank." });
@@ -120,6 +147,7 @@ export function useComposerAssist(input: {
         environmentId: input.environmentId,
         input: { operation: "blank", ...target, text: assist.text },
       }).then((result) => {
+        if (!current) return;
         setStatus((current) => (current?.kind === "working" ? null : current));
         if (result._tag === "Failure") {
           if (isAtomCommandInterrupted(result)) return;
@@ -138,7 +166,7 @@ export function useComposerAssist(input: {
         if (replaceDraft(draft, outcome.text)) {
           setStatus({
             kind: "rewritten",
-            before: draft.replace(/\s*_\s*$/, ""),
+            before: literal ? previous.draft : draft.replace(/\s*_\s*$/, ""),
             after: outcome.text,
           });
         } else {
@@ -148,13 +176,15 @@ export function useComposerAssist(input: {
           });
         }
       });
-      return;
+      return () => {
+        current = false;
+      };
     }
 
     if (!wantsCues || !wantsComposerCues(draft)) return;
     const timer = setTimeout(() => {
       if (latestDraftRef.current !== draft) return;
-      const assist = toComposerAssistDraft(draft);
+      const assist = literal ? toComposerAssistDraft(draft, []) : toComposerAssistDraft(draft);
       void askAssist({
         environmentId: input.environmentId,
         input: { operation: "cues", ...target, text: assist.text },
@@ -162,7 +192,7 @@ export function useComposerAssist(input: {
         // Cues are optional: a failed check just shows nothing.
         const answer =
           result._tag === "Failure" ? null : composerAssistAnswer(result.value, "cues");
-        if (answer === null || latestDraftRef.current !== draft) return;
+        if (!current || answer === null || latestDraftRef.current !== draft) return;
         answerCountRef.current += 1;
         setCues(
           composerDraftCues(draft, assist, answer.cues.cues, `cue-${answerCountRef.current}`).map(
@@ -177,15 +207,21 @@ export function useComposerAssist(input: {
         }
       });
     }, settings.pauseMs);
-    return () => clearTimeout(timer);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
   }, [
     askAssist,
+    answeringQuestion,
+    draftKey,
     enabled,
     input.draft,
     input.environmentId,
     input.instanceId,
     input.projectId,
     input.threadId,
+    literal,
     replaceDraft,
     settings,
     wantsCues,
@@ -218,5 +254,5 @@ export function useComposerAssist(input: {
 
   // A draft too short for cues shows none, whatever an earlier answer said.
   const shown = enabled && wantsComposerCues(input.draft) ? cues : NO_CUES;
-  return { status, cues: shown, choose, dismiss, revert };
+  return { status: enabled ? status : null, cues: shown, choose, dismiss, revert };
 }

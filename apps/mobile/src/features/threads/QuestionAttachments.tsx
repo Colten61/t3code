@@ -26,6 +26,8 @@ import {
   questionAttachmentDraftKey,
   questionAttachmentPreparationAtom,
 } from "../../state/question-attachments";
+import { useComposerAssist } from "./useComposerAssist";
+import { ComposerAssistBar } from "./ComposerAssistBar";
 
 export function QuestionAttachments(props: {
   requestId: string;
@@ -199,6 +201,32 @@ export function QuestionAttachments(props: {
           className="min-h-[54px] rounded-2xl border border-input-border bg-input px-3.5 py-3 font-sans text-base text-foreground"
         />
       </TextInputWrapper>
+      <QuestionComposerAssist
+        key={scopeKey}
+        environmentId={environmentId}
+        threadId={threadId}
+        projectId={selectedThread.projectId}
+        instanceId={selectedThread.modelSelection.instanceId}
+        serverConfig={configs.get(environmentId) ?? null}
+        draftKey={scopeKey}
+        question={props.question}
+        draft={props.value}
+        onChangeDraft={props.onChangeText}
+        active={!props.disabled}
+      />
     </View>
+  );
+}
+
+function QuestionComposerAssist(props: Parameters<typeof useComposerAssist>[0]) {
+  const assist = useComposerAssist(props);
+  return (
+    <ComposerAssistBar
+      status={assist.status}
+      cues={assist.cues}
+      onChoose={assist.choose}
+      onDismiss={assist.dismiss}
+      onRevert={assist.revert}
+    />
   );
 }

@@ -24,6 +24,10 @@ export const ComposerAssistRequest = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   /** The provider instance the composer sends with, to pick an account in automatic mode. */
   instanceId: Schema.optional(ProviderInstanceId),
+  /** Context for a custom answer; the draft itself remains only the editable answer. */
+  answeringQuestion: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(COMPOSER_ASSIST_MAX_DRAFT_CHARS)),
+  ),
   text: Schema.String.check(Schema.isMaxLength(COMPOSER_ASSIST_MAX_DRAFT_CHARS)),
 });
 export type ComposerAssistRequest = typeof ComposerAssistRequest.Type;
