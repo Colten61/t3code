@@ -20,19 +20,21 @@ import type {
 import { OrchestrationV2ThreadInstructions } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
 import { MoonIcon, PlusIcon, XIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
+import { useComposerDraftStore } from "~/composerDraftStore";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
+import { useThreadRouteTarget } from "~/hooks/useThreadRouteTarget";
 import { getCustomModelOptionsByInstance } from "~/modelSelection";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "~/providerInstances";
-import { useProjects, useServerConfigs } from "~/state/entities";
+import { useProjects, useQuietThreadShell, useServerConfigs } from "~/state/entities";
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { projectEnvironment, projectTodoBoard } from "~/state/projects";
 import { useEnvironmentQuery } from "~/state/query";
@@ -42,6 +44,8 @@ import { buildThreadRouteParams } from "~/threadRoutes";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { scheduledTaskDefaultModel } from "../settings/scheduledTasksSettings.logic";
+import { inBoardOrder } from "../tasks/taskBoardLogic";
+import { taskBoardState } from "../tasks/taskBoardStore";
 import {
   canStartTaskAgent,
   DEFAULT_ORCHESTRATOR_INSTRUCTIONS,
@@ -201,6 +205,7 @@ function CardChecklist(props: {
 
 function NightSetup(props: {
   readonly project: EnvironmentProject;
+  readonly projectKey: string;
   readonly projectPicker: ReactNode;
   readonly onClose: () => void;
 }) {
@@ -216,7 +221,10 @@ function NightSetup(props: {
   const [overseerModel, setOverseerModel] = useState<ModelSelection | null>(null);
   const [agentsModel, setAgentsModel] = useState<ModelSelection | null>(null);
   const [briefingMinutes, setBriefingMinutes] = useState<number>(DEFAULT_NIGHT_BRIEFING_MINUTES);
-  const [selectedCards, setSelectedCards] = useState<ReadonlySet<string>>(() => new Set());
+  // The cards ticked on this project's Tasks board start ticked here.
+  const [selectedCards, setSelectedCards] = useState(
+    () => taskBoardState(props.projectKey).selected,
+  );
   const [mode, setMode] = useState<TaskAgentsMode>("separate");
   const [limit, setLimit] = useState<number | "all">(DEFAULT_TASK_AGENT_LIMIT);
   // Each prompt keeps its id while the list changes around it.
@@ -233,7 +241,7 @@ function NightSetup(props: {
   );
   const snapshot = board.data?.available ? board.data.snapshot : null;
   const cards = snapshot
-    ? [...snapshot.cards, ...snapshot.backlog_cards].filter(canStartTaskAgent)
+    ? inBoardOrder([...snapshot.cards, ...snapshot.backlog_cards].filter(canStartTaskAgent))
     : [];
   const pickedCards = cards.filter((card) => selectedCards.has(card.id));
   const orchestrator = mode === "orchestrator" && pickedCards.length > 0;
@@ -599,14 +607,40 @@ function NightStatus(props: {
   );
 }
 
+/** The project the user is in: the open thread's or draft's, or the one the Tasks page shows. */
+function useCurrentProjectKey(): string | null {
+  const target = useThreadRouteTarget();
+  const thread = useQuietThreadShell(target?.kind === "server" ? target.threadRef : null);
+  const draftKey = useComposerDraftStore((store) => {
+    const draft =
+      target === null
+        ? null
+        : target.kind === "server"
+          ? store.getDraftThread(target.threadRef)
+          : store.getDraftSession(target.draftId);
+    return draft ? scopedProjectKey(scopeProjectRef(draft.environmentId, draft.projectId)) : null;
+  });
+  const tasksKey = useSearch({
+    strict: false,
+    select: (search) =>
+      search.environmentId && search.projectId
+        ? scopedProjectKey(scopeProjectRef(search.environmentId, search.projectId))
+        : null,
+  });
+  return thread
+    ? scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId))
+    : (draftKey ?? tasksKey);
+}
+
 export function NightDialog(props: { readonly onClose: () => void }) {
   const projects = useProjects();
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const currentKey = useCurrentProjectKey();
   const keyOf = (project: EnvironmentProject) =>
     scopedProjectKey(scopeProjectRef(project.environmentId, project.id));
   const [chosenKey, setChosenKey] = useState<string | null>(null);
   const project =
-    projects.find((candidate) => keyOf(candidate) === chosenKey) ??
+    projects.find((candidate) => keyOf(candidate) === (chosenKey ?? currentKey)) ??
     projects.find((candidate) => candidate.environmentId === primaryEnvironmentId) ??
     projects[0] ??
     null;
@@ -676,7 +710,13 @@ export function NightDialog(props: { readonly onClose: () => void }) {
             <Spinner />
           </DialogPanel>
         ) : (
-          <NightSetup project={project} projectPicker={projectPicker} onClose={props.onClose} />
+          <NightSetup
+            key={keyOf(project)}
+            project={project}
+            projectKey={keyOf(project)}
+            projectPicker={projectPicker}
+            onClose={props.onClose}
+          />
         )}
       </DialogPopup>
     </Dialog>

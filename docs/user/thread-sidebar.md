@@ -291,10 +291,11 @@ orchestrator is told the limit instead and keeps to it itself.
 ## Leave agents working overnight
 
 The moon in the sidebar plans a night, so you can go to bed with agents still working. On web and
-desktop, choose the project and the overseer's model, then what should happen once all the work is
-done:
+desktop, choose the project (the one you are in, to begin with) and the overseer's model, then what
+should happen once all the work is done:
 
-- start agents for TODO cards you tick, the way **Tasks** starts them, a few at a time;
+- start agents for TODO cards you tick, the way **Tasks** starts them, a few at a time; cards you
+  ticked in Tasks come ticked;
 - then run prompts you queue, one at a time, each in a new thread;
 - then power the computer off.
 

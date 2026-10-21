@@ -4,6 +4,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 import { act, render } from "../../../test/render";
 import { TasksPage } from "./TasksPage";
+import { useTaskBoardStore } from "./taskBoardStore";
 
 const project = {
   id: ProjectId.make("board"),
@@ -87,11 +88,24 @@ async function click(within: Element, label: string) {
   await act(async () => button.click());
 }
 
-it("preserves Backlog, Table, search and scroll when reading a card and returning", async () => {
-  await using screen = await render(
-    <TasksPage search={{ environmentId: project.environmentId, projectId: project.id }} />,
-  );
-  const host = screen.container;
+/**
+ * An empty board store, and a list that scrolls in every board that mounts: tests load no
+ * stylesheet.
+ */
+function freshBoard(): Disposable {
+  useTaskBoardStore.setState({ boards: {}, scrollTops: {} });
+  const style = document.createElement("style");
+  style.textContent = "div:has(> table) { height: 1px; overflow: auto; }";
+  document.head.append(style);
+  return { [Symbol.dispose]: () => style.remove() };
+}
+
+const tasksPage = (
+  <TasksPage search={{ environmentId: project.environmentId, projectId: project.id }} />
+);
+
+/** Backlog, Table, a search and a scrolled list; returns the offset. */
+async function arrangeBoard(host: HTMLElement) {
   await click(host.querySelector('[aria-label="Task source"]')!, "Backlog");
   await click(host.querySelector('[aria-label="Task view"]')!, "Table");
   const input = host.querySelector<HTMLInputElement>('input[aria-label="Search tasks"]')!;
@@ -103,16 +117,16 @@ it("preserves Backlog, Table, search and scroll when reading a card and returnin
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
   const scroll = host.querySelector("table")!.parentElement!;
-  // A real browser clamps scrollTop to what overflows, and tests load no
-  // stylesheet, so make the table's container scroll.
-  scroll.style.height = "1px";
-  scroll.style.overflow = "auto";
   const scrolledTo = scroll.scrollHeight - scroll.clientHeight;
   expect(scrolledTo).toBeGreaterThan(0);
-  scroll.scrollTop = scrolledTo;
-  await click(host, "Parked task");
-  expect(host.querySelector("pre")?.textContent).toBe("Card source");
-  await click(host, "Tasks");
+  await act(async () => {
+    scroll.scrollTop = scrolledTo;
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  return scrolledTo;
+}
+
+function expectArranged(host: HTMLElement, scrolledTo: number) {
   expect(host.querySelector<HTMLInputElement>('input[aria-label="Search tasks"]')?.value).toBe(
     "Parked",
   );
@@ -123,5 +137,27 @@ it("preserves Backlog, Table, search and scroll when reading a card and returnin
     host.querySelector('[aria-label="Task view"] button[aria-pressed="true"]')?.textContent,
   ).toBe("Table");
   expect(host.querySelector("table")?.parentElement?.scrollTop).toBe(scrolledTo);
-  expect(host.querySelector("table")?.closest("[hidden]")).toBeNull();
+}
+
+it("returns to Backlog, Table, search and scroll after reading a card", async () => {
+  using _board = freshBoard();
+  await using screen = await render(tasksPage);
+  const host = screen.container;
+  const scrolledTo = await arrangeBoard(host);
+  await click(host, "Parked task");
+  expect(host.querySelector("pre")?.textContent).toBe("Card source");
+  expect(host.querySelector("table")).toBeNull();
+  await click(host, "Tasks");
+  expectArranged(host, scrolledTo);
+});
+
+it("keeps the board as it was when it mounts again (another tab, the full page, the chat)", async () => {
+  using _board = freshBoard();
+  await using screen = await render(tasksPage);
+  const host = screen.container;
+  const scrolledTo = await arrangeBoard(host);
+  await screen.rerender(<div />);
+  expect(host.querySelector("table")).toBeNull();
+  await screen.rerender(tasksPage);
+  expectArranged(host, scrolledTo);
 });
