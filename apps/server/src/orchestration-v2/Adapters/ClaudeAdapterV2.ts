@@ -276,6 +276,8 @@ export function claudeProviderTurnTokenUsage(
     ...(promptCacheTtlMs === undefined ? {} : { promptCacheTtlMs }),
     ...claudeAutoCompactThreshold(autoCompactWindow, maxTokens),
     ...(promptCacheExpiresAt === undefined ? {} : { promptCacheExpiresAt }),
+    // FORK: a fully cached request reports no expiry; T3 dates its cache from this.
+    ...(requestedAt === undefined ? {} : { requestedAt: DateTime.formatIso(requestedAt) }),
     updatedAt,
   };
 }

@@ -174,6 +174,11 @@ export const OrchestrationV2ProviderTurnTokenUsage = Schema.Struct({
   promptCacheTtlMs: Schema.optional(PositiveInt),
   autoCompactThreshold: Schema.optional(PositiveInt),
   promptCacheExpiresAt: Schema.optional(Schema.String),
+  /**
+   * FORK: when the reported request was sent. A request served wholly from the cache reports no
+   * expiry, yet restarts the cache's lifetime from this moment (IdleCompactionWorker).
+   */
+  requestedAt: Schema.optional(Schema.String),
   updatedAt: Schema.String,
 });
 export type OrchestrationV2ProviderTurnTokenUsage =

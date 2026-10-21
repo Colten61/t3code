@@ -491,11 +491,15 @@ const IDLE_COMPACTION_BLOCKING_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["sta
 
 /**
  * FORK: whether T3's /compact of a thread idle since `runId` (IdleCompactionWorker) may start:
- * nothing ran, waits or is queued since that run, and the thread is not archived, settled or
- * snoozed. Otherwise the command is accepted and does nothing.
+ * nothing ran, waits or is queued since that run, no merge-back waits for the next message, and
+ * the thread is not archived, settled or snoozed. Otherwise the command is accepted and does
+ * nothing.
  */
 export function idleCompactionMayStart(input: {
-  readonly projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "runtimeRequests">;
+  readonly projection: Pick<
+    OrchestrationV2ThreadProjection,
+    "thread" | "runs" | "runtimeRequests" | "contextTransfers"
+  >;
   readonly command: Pick<
     Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     "createdBy" | "creationSource" | "text" | "attachments" | "dispatchMode"
@@ -514,6 +518,8 @@ export function idleCompactionMayStart(input: {
     latestExecutedRun(projection.runs)?.id === input.runId &&
     !projection.runs.some((run) => IDLE_COMPACTION_BLOCKING_RUN_STATUSES.has(run.status)) &&
     !projection.runtimeRequests.some((request) => request.status === "pending") &&
+    // The /compact turn would take the merge-back meant for the user's next message.
+    pendingMergeBackTransfersForThread(projection).length === 0 &&
     thread.archivedAt === null &&
     thread.deletedAt === null &&
     thread.settledOverride !== "settled" &&
