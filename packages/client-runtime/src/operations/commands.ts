@@ -138,6 +138,7 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
 
 export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
   readonly runtimeMode: RuntimeMode;
+  readonly applyImmediately?: boolean;
 }
 
 export interface SetThreadInteractionModeInput extends ThreadCommandInput {
@@ -632,6 +633,7 @@ export const setThreadRuntimeMode = Effect.fn("EnvironmentCommands.setThreadRunt
       commandId: yield* allocateCommandId(input),
       threadId: input.threadId,
       runtimeMode: input.runtimeMode,
+      ...(input.applyImmediately === undefined ? {} : { applyImmediately: input.applyImmediately }),
     });
   },
 );

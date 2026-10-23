@@ -4,6 +4,15 @@ Permission modes request the provider's sandbox and approval settings. Choose a 
 message composer; it applies to that thread. The permission status alongside it shows the
 provider's last reported settings, which can differ from the requested mode.
 
+Changing a thread's mode saves it immediately. On providers that support restarting a turn,
+including Codex, T3 stops the active turn and continues the current task in the same conversation
+with the new permissions. This also works for T3-managed delegated tasks that started with an
+explicitly chosen mode. Native work owned by the interrupted turn stops with it; other threads
+keep their own modes. Providers without turn restart use the new mode on the next turn. Changing
+the mode after pressing Stop also saves it for the next turn.
+During startup or compaction, changes are saved for the next turn. Choose the same mode again
+once the current turn is ready to apply a mode you previously saved for later.
+
 Set the default for new threads in **Settings → General → New threads → Permissions**.
 Projects can override the environment default. New threads use this setting rather than the
 mode of the thread you were viewing. The initial default is **Full access**; existing threads
@@ -30,7 +39,7 @@ also show this state.
 Command rules, permission profiles and external restrictions can still block actions. For
 example, a rule that requires approval for `git commit` blocks it while approval prompts are
 disabled, even in **Full access**. The permission details explain this conflict. Enabling
-prompts requires a mode that allows them; changing the selected mode affects the next turn.
+prompts requires a mode that allows them.
 
 ## Provider differences
 

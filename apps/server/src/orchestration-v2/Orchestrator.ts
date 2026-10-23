@@ -3762,6 +3762,74 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
 
+    if (
+      command.type === "thread.runtime-mode.set" &&
+      command.applyImmediately !== true &&
+      command.runtimeMode === thread.runtimeMode
+    )
+      return;
+    if (command.type === "thread.runtime-mode.set" && command.applyImmediately === true) {
+      if (isProviderNativeSubagentThread(thread)) {
+        return yield* new OrchestratorSubagentThreadReadOnlyError({
+          commandId: command.commandId,
+          threadId: command.threadId,
+        });
+      }
+      const projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      if (projection.runs.some((run) => run.status === "starting")) return;
+      const running = projection.runs.find((run) => run.status === "running");
+      if (running !== undefined) {
+        const providerThread = projection.providerThreads.find(
+          (candidate) => candidate.id === running.providerThreadId,
+        );
+        const session = projection.providerSessions.find(
+          (candidate) => candidate.id === providerThread?.providerSessionId,
+        );
+        const activeTurn = projection.providerTurns.find(
+          (turn) => turn.runAttemptId === running.activeAttemptId && turn.status === "running",
+        );
+        const activeMessage = projection.messages.find(
+          (message) => message.id === running.userMessageId,
+        );
+        if (
+          activeTurn === undefined ||
+          (activeMessage !== undefined && isNativeMaintenanceCommand(activeMessage)) ||
+          !session?.capabilities.turns.supportsSteeringByInterruptRestart ||
+          !session.capabilities.turns.supportsInterrupt ||
+          (yield* stopReachedRun(command, command.threadId, running.id))
+        )
+          return;
+        if (Option.isNone(yield* providerSessions.get(session.id).pipe(mapDispatchError(command))))
+          return;
+        const nextPolicy = yield* runtimePolicy
+          .resolve({
+            thread: projection.thread,
+            modelSelection: running.modelSelection,
+          })
+          .pipe(mapDispatchError(command));
+        if (running.runtimeModeAtStart === nextPolicy.runtimeMode) return;
+        // Native turn policies are fixed at start. Reuse the restart path so
+        // pending approvals end with the old turn and the conversation resumes.
+        yield* dispatchSteerIntoRun({
+          command,
+          events,
+          effects,
+          projection,
+          modelSelection: running.modelSelection,
+          targetRunId: running.id,
+          messageId: MessageId.make(`permissions:${command.commandId}`),
+          text: "The user changed this thread's permissions. Continue the current task from where you stopped, using the updated permissions.",
+          attachments: [],
+          createdBy: "system",
+          creationSource: "server",
+          forceRestart: true,
+        });
+        return;
+      }
+    }
+    if (command.type === "thread.runtime-mode.set" && command.runtimeMode === thread.runtimeMode)
+      return;
+
     // Settle joins archive here: both mean "done with this
     // thread", so a live provider session must not keep running background
     // work (PR monitors, dev servers, subagent fleets) after any of them
@@ -4304,7 +4372,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const dispatchSteerIntoRun = Effect.fn("Orchestrator.dispatchSteerIntoRun")(function* (input: {
     readonly command: Extract<
       OrchestrationV2Command,
-      { readonly type: "message.dispatch" | "queued-message.promote-to-steer" }
+      {
+        readonly type:
+          | "message.dispatch"
+          | "queued-message.promote-to-steer"
+          | "thread.runtime-mode.set";
+      }
     >;
     readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
     readonly effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>;
@@ -4320,6 +4393,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       | "nodes"
       | "thread"
       | "turnItems"
+      | "runtimeRequests"
     >;
     readonly modelSelection: ModelSelection;
     readonly targetRunId: OrchestrationV2Run["id"];
@@ -4659,7 +4733,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (providerInstanceChanged && !canResumeAcrossInstances) ||
       selectionTransition?.type === "create_with_handoff";
     const requiresProviderSessionRestart =
-      canResumeAcrossInstances || selectionTransition?.type === "restart_session";
+      canResumeAcrossInstances ||
+      selectionTransition?.type === "restart_session" ||
+      (input.command.type === "thread.runtime-mode.set" &&
+        !session.providerSession.capabilities.sessions.supportsRuntimeModeSwitchInSession);
     if (requiresProviderThreadHandoff) {
       const targetAdapter = yield* providerAdapters.get(input.modelSelection.instanceId).pipe(
         Effect.mapError(
@@ -4907,6 +4984,62 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         occurredAt: now,
         payload: { ...currentRootNode, status: "interrupted", completedAt: now },
       });
+    }
+    if (input.command.type === "thread.runtime-mode.set") {
+      const { turnItems: requestItems } = yield* projectionStore
+        .getThreadRecords(input.command.threadId, ["turnItems"], {
+          turnItemTypes: ["approval_request", "user_input_request"],
+          turnItemRunId: targetRun.id,
+        })
+        .pipe(mapDispatchError(input.command));
+      for (const request of input.projection.runtimeRequests) {
+        if (request.status !== "pending" || request.providerTurnId !== providerTurn.id) continue;
+        yield* emitEvent({
+          type: "runtime-request.updated",
+          threadId: input.command.threadId,
+          runId: targetRun.id,
+          nodeId: request.nodeId,
+          providerInstanceId: targetRun.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...request,
+            status: "cancelled",
+            resolvedAt: now,
+            responseCapability: {
+              type: "not_resumable",
+              reason: "The turn's permissions changed.",
+            },
+          },
+        });
+        const requestNode = input.projection.nodes.find((node) => node.id === request.nodeId);
+        if (requestNode !== undefined) {
+          yield* emitEvent({
+            type: "node.updated",
+            threadId: input.command.threadId,
+            runId: targetRun.id,
+            nodeId: requestNode.id,
+            providerInstanceId: targetRun.providerInstanceId,
+            occurredAt: now,
+            payload: { ...requestNode, status: "cancelled", completedAt: now },
+          });
+        }
+        const requestItem = requestItems.find(
+          (item) =>
+            (item.type === "approval_request" || item.type === "user_input_request") &&
+            item.requestId === request.id,
+        );
+        if (requestItem !== undefined) {
+          yield* emitEvent({
+            type: "turn-item.updated",
+            threadId: input.command.threadId,
+            runId: targetRun.id,
+            nodeId: request.nodeId,
+            providerInstanceId: targetRun.providerInstanceId,
+            occurredAt: now,
+            payload: { ...requestItem, status: "cancelled", completedAt: now, updatedAt: now },
+          });
+        }
+      }
     }
     if (selectionChanged) {
       yield* emitEvent({

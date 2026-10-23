@@ -1317,7 +1317,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
               <ComposerSelectControl
                 data-composer-shortcut="composer.mode"
                 size={size}
-                aria-label={`Permissions for next turn: ${runtimeModeOption.label}`}
+                aria-label={`Permissions: ${runtimeModeOption.label}`}
               />
             }
           >
@@ -1326,8 +1326,10 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
           </TooltipTrigger>
           <SelectPopup alignItemWithTrigger={false} {...composerFloatingLayerProps}>
             <div className="max-w-80 px-3 py-2 text-xs text-muted-foreground">
-              <p className="font-medium">Permissions for next turn</p>
-              <p>Changes apply when you send the next message.</p>
+              <p className="font-medium">Thread permissions</p>
+              <p>
+                Saved now. Active turns restart when supported; otherwise changes apply next turn.
+              </p>
               {props.reportedPermissions ? <p>{permissionReport.detail}</p> : null}
               {permissionReport.approvalNotice ? <p>{permissionReport.approvalNotice}</p> : null}
             </div>
@@ -1337,6 +1339,9 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
                 <SelectItem
                   key={option.mode}
                   value={option.mode}
+                  onClick={() => {
+                    if (option.mode === props.runtimeMode) props.onRuntimeModeChange(option.mode);
+                  }}
                   hideIndicator
                   className="min-w-64"
                 >
@@ -1357,7 +1362,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
           </SelectPopup>
         </Select>
         <TooltipPopup side="top">
-          Permissions apply to the next turn.
+          Active turns restart when supported; otherwise permissions change next turn.
           {props.reportedPermissions ? ` ${permissionReport.detail}` : null}
           {permissionReport.approvalNotice ? ` ${permissionReport.approvalNotice}` : null}
         </TooltipPopup>

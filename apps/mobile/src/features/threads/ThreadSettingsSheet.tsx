@@ -870,7 +870,7 @@ function ThreadSettingsOptionsItem(props: {
         <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
           <DisclosureRow
             isLast
-            label="Permissions for next turn"
+            label="Thread permissions"
             value={
               session.runtimeModeChoices.find((choice) => choice.mode === session.runtimeMode)
                 ?.label
@@ -879,7 +879,7 @@ function ThreadSettingsOptionsItem(props: {
           />
           <View className="px-5 pb-3">
             <Text className="text-xs text-foreground-muted">
-              Changes apply when you send the next message.
+              Saved now. Active turns restart when supported; otherwise changes apply next turn.
             </Text>
             {session.reportedPermissions ? (
               <Text className="text-xs text-foreground-muted">{permissionReport.detail}</Text>

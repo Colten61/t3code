@@ -80,8 +80,8 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
           </>
         ) : null}
         <div className="max-w-80 px-2 py-1.5 text-muted-foreground text-xs">
-          <p className="font-medium">Permissions for next turn</p>
-          <p>Changes apply when you send the next message.</p>
+          <p className="font-medium">Thread permissions</p>
+          <p>Saved now. Active turns restart when supported; otherwise changes apply next turn.</p>
           {props.reportedPermissions ? <p>{permissionReport.detail}</p> : null}
           {permissionReport.approvalNotice ? <p>{permissionReport.approvalNotice}</p> : null}
         </div>
@@ -93,7 +93,13 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
           }}
         >
           {props.runtimeModeOptions.map((option) => (
-            <MenuRadioItem key={option.mode} value={option.mode}>
+            <MenuRadioItem
+              key={option.mode}
+              value={option.mode}
+              onClick={() => {
+                if (option.mode === props.runtimeMode) props.onRuntimeModeChange(option.mode);
+              }}
+            >
               {option.label}
             </MenuRadioItem>
           ))}

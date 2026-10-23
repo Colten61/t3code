@@ -60,6 +60,7 @@ export class ThreadLifecycleService extends Context.Service<
       readonly commandId: CommandId;
       readonly threadId: ThreadId;
       readonly runtimeMode: RuntimeMode;
+      readonly applyImmediately?: boolean;
     }) => Effect.Effect<Pick<OrchestrationV2ThreadProjection, "thread">, ThreadLifecycleError>;
     readonly setInteractionMode: (input: {
       readonly commandId: CommandId;
@@ -121,6 +122,9 @@ const make = Effect.gen(function* () {
         commandId: input.commandId,
         threadId: input.threadId,
         runtimeMode: input.runtimeMode,
+        ...(input.applyImmediately === undefined
+          ? {}
+          : { applyImmediately: input.applyImmediately }),
       }),
     setInteractionMode: (input) =>
       dispatch("set-interaction-mode", input.threadId, {

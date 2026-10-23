@@ -3769,8 +3769,26 @@ export default function ChatView(props: ChatViewProps) {
     settings,
   });
 
-  const handleRuntimeModeChange = (mode: RuntimeMode) => {
-    if (mode === runtimeMode) return;
+  const handleRuntimeModeChange = async (mode: RuntimeMode) => {
+    if (mode === runtimeMode && isLocalDraftThread) return;
+    if (!isLocalDraftThread) {
+      if (!activeThread || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope))
+        return;
+      const result = await setThreadRuntimeMode({
+        environmentId,
+        input: { threadId: activeThread.id, runtimeMode: mode, applyImmediately: true },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            activeThread.id,
+            error instanceof Error ? error.message : "Failed to change permissions.",
+          );
+        }
+        return;
+      }
+    }
     setComposerDraftRuntimeMode(composerDraftTarget, mode);
     if (isLocalDraftThread) {
       setDraftThreadContext(composerDraftTarget, { runtimeMode: mode });

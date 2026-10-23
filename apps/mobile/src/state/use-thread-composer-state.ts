@@ -194,6 +194,7 @@ export function useThreadComposerState() {
   const uploadThreadFeedback = useAtomCommand(threadEnvironment.uploadFeedback, {
     reportFailure: false,
   });
+  const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode);
   const editQueuedRun = useAtomCommand(threadEnvironment.editQueuedRun, {
     label: "edit queued message",
     reportFailure: false,
@@ -949,9 +950,20 @@ export function useThreadComposerState() {
     });
   };
 
-  const onUpdateRuntimeMode = (value: RuntimeMode) => {
+  const onUpdateRuntimeMode = async (value: RuntimeMode) => {
     if (!selectedThreadKey) {
       return;
+    }
+    if (selectedThreadShell && selectedThreadCreation === null) {
+      const result = await setThreadRuntimeMode({
+        environmentId: selectedThreadShell.environmentId,
+        input: {
+          threadId: selectedThreadShell.id,
+          runtimeMode: value,
+          applyImmediately: true,
+        },
+      });
+      if (result._tag === "Failure") return;
     }
     updateComposerDraftSettings(selectedThreadKey, { runtimeMode: value });
   };
