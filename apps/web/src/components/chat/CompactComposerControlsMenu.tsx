@@ -81,7 +81,10 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         ) : null}
         <div className="max-w-80 px-2 py-1.5 text-muted-foreground text-xs">
           <p className="font-medium">Thread permissions</p>
-          <p>Saved now. Active turns restart when supported; otherwise changes apply next turn.</p>
+          <p>
+            Codex: Full access and Auto-accept edits handle requests now. Native permissions apply
+            next turn.
+          </p>
           {props.reportedPermissions ? <p>{permissionReport.detail}</p> : null}
           {permissionReport.approvalNotice ? <p>{permissionReport.approvalNotice}</p> : null}
         </div>

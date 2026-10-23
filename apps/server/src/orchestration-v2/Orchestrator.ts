@@ -131,7 +131,9 @@ import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { permitsAutomaticApproval } from "./runtimeApprovalMode.ts";
 import {
+  clampRuntimeModeToHardCap,
   providerInstanceHardCapInForce,
   refusesFileChangeResponse,
 } from "../provider/ProviderInstanceHardCap.ts";
@@ -3105,6 +3107,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       markUnreadVisitedAt = DateTime.subtract(latestRunCompletedAt, { milliseconds: 1 });
     }
+    const approvalRuns =
+      command.type === "thread.runtime-mode.set" && command.applyImmediately === true
+        ? (yield* projectionStore
+            .getThreadRecords(command.threadId, ["runs"])
+            .pipe(mapDispatchError(command))).runs
+        : [];
+    const approvalRun =
+      approvalRuns.findLast(
+        (run) =>
+          run.rootNodeId !== null &&
+          (run.status === "starting" || run.status === "running" || run.status === "waiting"),
+      ) ?? approvalRuns.findLast((run) => run.rootNodeId !== null && run.status !== "queued");
     const updatedThread: OrchestrationV2AppThread = (() => {
       switch (command.type) {
         case "thread.archive":
@@ -3560,8 +3574,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 updatedAt: now,
               }
             : thread;
-        case "thread.runtime-mode.set":
-          return { ...thread, runtimeMode: command.runtimeMode, updatedAt: now };
+        case "thread.runtime-mode.set": {
+          const { approvalOverride: previousOverride, ...baseThread } = thread;
+          const override =
+            command.applyImmediately === true
+              ? approvalRun?.rootNodeId == null
+                ? undefined
+                : {
+                    commandId: command.commandId,
+                    rootNodeId: approvalRun.rootNodeId,
+                    providerInstanceId: approvalRun.providerInstanceId,
+                    runtimeMode: command.runtimeMode,
+                  }
+              : previousOverride?.runtimeMode === command.runtimeMode
+                ? previousOverride
+                : undefined;
+          return {
+            ...baseThread,
+            runtimeMode: command.runtimeMode,
+            updatedAt: now,
+            ...(override === undefined ? {} : { approvalOverride: override }),
+          };
+        }
         case "thread.interaction-mode.set":
           return { ...thread, interactionMode: command.interactionMode, updatedAt: now };
         case "thread.model-selection.set":
@@ -3761,74 +3795,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cancelQueuedDelivery: false,
       });
     }
-
-    if (
-      command.type === "thread.runtime-mode.set" &&
-      command.applyImmediately !== true &&
-      command.runtimeMode === thread.runtimeMode
-    )
-      return;
-    if (command.type === "thread.runtime-mode.set" && command.applyImmediately === true) {
-      if (isProviderNativeSubagentThread(thread)) {
-        return yield* new OrchestratorSubagentThreadReadOnlyError({
-          commandId: command.commandId,
-          threadId: command.threadId,
-        });
-      }
-      const projection = yield* getProjectionWithPendingEvents(command.threadId, events);
-      if (projection.runs.some((run) => run.status === "starting")) return;
-      const running = projection.runs.find((run) => run.status === "running");
-      if (running !== undefined) {
-        const providerThread = projection.providerThreads.find(
-          (candidate) => candidate.id === running.providerThreadId,
-        );
-        const session = projection.providerSessions.find(
-          (candidate) => candidate.id === providerThread?.providerSessionId,
-        );
-        const activeTurn = projection.providerTurns.find(
-          (turn) => turn.runAttemptId === running.activeAttemptId && turn.status === "running",
-        );
-        const activeMessage = projection.messages.find(
-          (message) => message.id === running.userMessageId,
-        );
-        if (
-          activeTurn === undefined ||
-          (activeMessage !== undefined && isNativeMaintenanceCommand(activeMessage)) ||
-          !session?.capabilities.turns.supportsSteeringByInterruptRestart ||
-          !session.capabilities.turns.supportsInterrupt ||
-          (yield* stopReachedRun(command, command.threadId, running.id))
-        )
-          return;
-        if (Option.isNone(yield* providerSessions.get(session.id).pipe(mapDispatchError(command))))
-          return;
-        const nextPolicy = yield* runtimePolicy
-          .resolve({
-            thread: projection.thread,
-            modelSelection: running.modelSelection,
-          })
-          .pipe(mapDispatchError(command));
-        if (running.runtimeModeAtStart === nextPolicy.runtimeMode) return;
-        // Native turn policies are fixed at start. Reuse the restart path so
-        // pending approvals end with the old turn and the conversation resumes.
-        yield* dispatchSteerIntoRun({
-          command,
-          events,
-          effects,
-          projection,
-          modelSelection: running.modelSelection,
-          targetRunId: running.id,
-          messageId: MessageId.make(`permissions:${command.commandId}`),
-          text: "The user changed this thread's permissions. Continue the current task from where you stopped, using the updated permissions.",
-          attachments: [],
-          createdBy: "system",
-          creationSource: "server",
-          forceRestart: true,
-        });
-        return;
-      }
-    }
-    if (command.type === "thread.runtime-mode.set" && command.runtimeMode === thread.runtimeMode)
-      return;
 
     // Settle joins archive here: both mean "done with this
     // thread", so a live provider session must not keep running background
@@ -4372,12 +4338,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const dispatchSteerIntoRun = Effect.fn("Orchestrator.dispatchSteerIntoRun")(function* (input: {
     readonly command: Extract<
       OrchestrationV2Command,
-      {
-        readonly type:
-          | "message.dispatch"
-          | "queued-message.promote-to-steer"
-          | "thread.runtime-mode.set";
-      }
+      { readonly type: "message.dispatch" | "queued-message.promote-to-steer" }
     >;
     readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
     readonly effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>;
@@ -4393,7 +4354,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       | "nodes"
       | "thread"
       | "turnItems"
-      | "runtimeRequests"
     >;
     readonly modelSelection: ModelSelection;
     readonly targetRunId: OrchestrationV2Run["id"];
@@ -4733,10 +4693,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (providerInstanceChanged && !canResumeAcrossInstances) ||
       selectionTransition?.type === "create_with_handoff";
     const requiresProviderSessionRestart =
-      canResumeAcrossInstances ||
-      selectionTransition?.type === "restart_session" ||
-      (input.command.type === "thread.runtime-mode.set" &&
-        !session.providerSession.capabilities.sessions.supportsRuntimeModeSwitchInSession);
+      canResumeAcrossInstances || selectionTransition?.type === "restart_session";
     if (requiresProviderThreadHandoff) {
       const targetAdapter = yield* providerAdapters.get(input.modelSelection.instanceId).pipe(
         Effect.mapError(
@@ -4984,62 +4941,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         occurredAt: now,
         payload: { ...currentRootNode, status: "interrupted", completedAt: now },
       });
-    }
-    if (input.command.type === "thread.runtime-mode.set") {
-      const { turnItems: requestItems } = yield* projectionStore
-        .getThreadRecords(input.command.threadId, ["turnItems"], {
-          turnItemTypes: ["approval_request", "user_input_request"],
-          turnItemRunId: targetRun.id,
-        })
-        .pipe(mapDispatchError(input.command));
-      for (const request of input.projection.runtimeRequests) {
-        if (request.status !== "pending" || request.providerTurnId !== providerTurn.id) continue;
-        yield* emitEvent({
-          type: "runtime-request.updated",
-          threadId: input.command.threadId,
-          runId: targetRun.id,
-          nodeId: request.nodeId,
-          providerInstanceId: targetRun.providerInstanceId,
-          occurredAt: now,
-          payload: {
-            ...request,
-            status: "cancelled",
-            resolvedAt: now,
-            responseCapability: {
-              type: "not_resumable",
-              reason: "The turn's permissions changed.",
-            },
-          },
-        });
-        const requestNode = input.projection.nodes.find((node) => node.id === request.nodeId);
-        if (requestNode !== undefined) {
-          yield* emitEvent({
-            type: "node.updated",
-            threadId: input.command.threadId,
-            runId: targetRun.id,
-            nodeId: requestNode.id,
-            providerInstanceId: targetRun.providerInstanceId,
-            occurredAt: now,
-            payload: { ...requestNode, status: "cancelled", completedAt: now },
-          });
-        }
-        const requestItem = requestItems.find(
-          (item) =>
-            (item.type === "approval_request" || item.type === "user_input_request") &&
-            item.requestId === request.id,
-        );
-        if (requestItem !== undefined) {
-          yield* emitEvent({
-            type: "turn-item.updated",
-            threadId: input.command.threadId,
-            runId: targetRun.id,
-            nodeId: request.nodeId,
-            providerInstanceId: targetRun.providerInstanceId,
-            occurredAt: now,
-            payload: { ...requestItem, status: "cancelled", completedAt: now, updatedAt: now },
-          });
-        }
-      }
     }
     if (selectionChanged) {
       yield* emitEvent({
@@ -8091,6 +7992,56 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ? runtimeRequest.responseCapability.providerSessionId
           : null;
       const providerSession = context.session;
+      if (command.approvalOverrideId !== undefined) {
+        const { thread, runs } = yield* projectionStore
+          .getThreadRecords(command.threadId, ["runs"])
+          .pipe(mapDispatchError(command));
+        const override = thread.approvalOverride;
+        const activeApprovalRun = runs.find(
+          (run) =>
+            run.rootNodeId === override?.rootNodeId &&
+            (run.status === "starting" || run.status === "running" || run.status === "waiting"),
+        );
+        if (
+          override === undefined ||
+          override.commandId !== command.approvalOverrideId ||
+          providerSession?.driver !== "codex" ||
+          providerSession.providerInstanceId !== override.providerInstanceId ||
+          context.node?.rootNodeId !== override.rootNodeId ||
+          command.decision !== "accept" ||
+          command.answers !== undefined ||
+          runtimeRequest.responseCapability.type !== "live" ||
+          activeApprovalRun === undefined
+        )
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Automatic approval no longer matches the current permission choice.",
+          });
+        if (yield* stopReachedRun(command, command.threadId, activeApprovalRun.id)) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "The current turn is stopping.",
+          });
+        }
+        const cap = yield* providerInstanceHardCapInForce(
+          serverSettings,
+          override.providerInstanceId,
+        );
+        if (
+          !permitsAutomaticApproval(
+            clampRuntimeModeToHardCap(override.runtimeMode, cap),
+            runtimeRequest.kind,
+          )
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "The current permission choice requires approval for this action.",
+          });
+        }
+      }
       if (providerSessionId !== null && providerSession === undefined) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,

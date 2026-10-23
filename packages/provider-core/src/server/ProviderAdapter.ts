@@ -608,6 +608,12 @@ export interface ProviderAdapterV2SessionRuntime {
     cwd?: string | null,
   ) => number | undefined;
   readonly canReuseContextUsage?: (previous: ModelSelection, next: ModelSelection) => boolean;
+  readonly updateApprovalMode?: (input: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+    readonly runId: RunId;
+    readonly runtimeMode: RuntimeMode;
+    readonly changeId: string;
+  }) => Effect.Effect<void, ProviderAdapterV2Error>;
   readonly ensureThread: (
     input: ProviderAdapterV2EnsureThreadInput,
   ) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;

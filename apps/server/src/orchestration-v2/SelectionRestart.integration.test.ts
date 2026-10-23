@@ -3,7 +3,6 @@ import {
   CommandId,
   EventId,
   MessageId,
-  NodeId,
   type ModelSelection,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderSession,
@@ -15,9 +14,7 @@ import {
   ProviderThreadId,
   ProviderTurnId,
   type RunId,
-  RuntimeRequestId,
   ThreadId,
-  TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -35,357 +32,6 @@ import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
-
-it.live.each([
-  { name: "pooled session", restart: true, reuseSession: true },
-  { name: "replacement session", restart: true, reuseSession: false },
-  { name: "provider without turn restart", restart: false, reuseSession: false },
-] as const)("applies a permission-menu change to a supervised task: $name", (scenario) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const cwd = yield* checkpointWorkspace("permission-mode-restart");
-      const threadId = ThreadId.make("thread:permission-mode-restart");
-      const state = yield* Ref.make<RestartAdapterState>({
-        activeTurn: null,
-        opened: [],
-        started: [],
-        closedSessionCount: 0,
-        failedReplacementOpen: false,
-      });
-      yield* Effect.gen(function* () {
-        const orchestrator = yield* Orchestrator.OrchestratorV2;
-        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-        const eventSink = yield* EventSink.EventSinkV2;
-        yield* orchestrator.dispatch({
-          type: "thread.create",
-          commandId: CommandId.make("permissions:create"),
-          threadId,
-          projectId: ProjectId.make("project:permissions"),
-          title: "Supervised review",
-          modelSelection: initialSelection,
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: cwd,
-          createdBy: "agent",
-          creationSource: "mcp",
-        });
-        const nextRunning = Effect.fn("TestPermissionMode.nextRunning")(function* () {
-          return yield* eventSink
-            .stream({ threadId, afterSequence: yield* eventSink.latestSequence({ threadId }) })
-            .pipe(
-              Stream.filter(
-                ({ event }) =>
-                  event.type === "provider-turn.updated" && event.payload.status === "running",
-              ),
-              Stream.take(1),
-              Stream.runDrain,
-              Effect.forkScoped,
-            );
-        });
-        const running = yield* nextRunning();
-        yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          commandId: CommandId.make("permissions:start"),
-          threadId,
-          messageId: MessageId.make("permissions:task"),
-          text: "Review the current changes.",
-          attachments: [],
-          dispatchMode: { type: "start_immediately" },
-          createdBy: "agent",
-          creationSource: "mcp",
-        });
-        yield* Fiber.join(running);
-        yield* worker.drain();
-        const original = (yield* Ref.get(state)).activeTurn!;
-        assert.equal(original.input.runtimePolicy.runtimeMode, "approval-required");
-        const now = yield* DateTime.now;
-        const activeProjection = yield* orchestrator.getThreadProjection(threadId);
-        const activeRun = activeProjection.runs[0]!;
-        assert.equal(activeRun.runtimeModeAtStart, "approval-required");
-        yield* eventSink.write({
-          events: [
-            {
-              id: EventId.make("permissions:starting"),
-              type: "run.updated",
-              threadId,
-              runId: activeRun.id,
-              occurredAt: now,
-              payload: { ...activeRun, status: "starting" },
-            },
-          ],
-        });
-        yield* orchestrator.dispatch({
-          type: "thread.runtime-mode.set",
-          commandId: CommandId.make("permissions:during-startup"),
-          threadId,
-          runtimeMode: "full-access",
-          applyImmediately: true,
-        });
-        yield* worker.drain();
-        assert.lengthOf((yield* Ref.get(state)).started, 1);
-        assert.equal(
-          (yield* orchestrator.getThreadProjection(threadId)).thread.runtimeMode,
-          "full-access",
-        );
-        yield* eventSink.write({
-          events: [
-            {
-              id: EventId.make("permissions:started"),
-              type: "run.updated",
-              threadId,
-              runId: activeRun.id,
-              occurredAt: now,
-              payload: activeRun,
-            },
-          ],
-        });
-        const taskMessage = activeProjection.messages.find(
-          (message) => message.id === activeRun.userMessageId,
-        )!;
-        yield* eventSink.write({
-          events: [
-            {
-              id: EventId.make("permissions:maintenance"),
-              type: "message.updated",
-              threadId,
-              occurredAt: now,
-              payload: { ...taskMessage, text: "/compact" },
-            },
-          ],
-        });
-        yield* orchestrator.dispatch({
-          type: "thread.runtime-mode.set",
-          commandId: CommandId.make("permissions:during-compaction"),
-          threadId,
-          runtimeMode: "auto",
-          applyImmediately: true,
-        });
-        yield* worker.drain();
-        assert.lengthOf((yield* Ref.get(state)).started, 1);
-        assert.equal(
-          (yield* orchestrator.getThreadProjection(threadId)).thread.runtimeMode,
-          "auto",
-        );
-        yield* eventSink.write({
-          events: [
-            {
-              id: EventId.make("permissions:maintenance-finished"),
-              type: "message.updated",
-              threadId,
-              occurredAt: now,
-              payload: taskMessage,
-            },
-          ],
-        });
-        const approvalNodeId = NodeId.make("permissions:approval-node");
-        const approvalItemId = TurnItemId.make("permissions:approval-item");
-        const approvalRequestId = RuntimeRequestId.make("permissions:pending-command");
-        yield* eventSink.write({
-          events: [
-            {
-              id: EventId.make("permissions:approval-node"),
-              type: "node.updated",
-              threadId,
-              occurredAt: now,
-              payload: {
-                id: approvalNodeId,
-                threadId,
-                runId: original.input.runId,
-                parentNodeId: original.input.rootNodeId,
-                rootNodeId: original.input.rootNodeId,
-                kind: "approval_request",
-                status: "waiting",
-                countsForRun: false,
-                providerThreadId: original.input.providerThread.id,
-                providerTurnId: original.providerTurnId,
-                nativeItemRef: null,
-                runtimeRequestId: approvalRequestId,
-                checkpointScopeId: null,
-                startedAt: now,
-                completedAt: null,
-              },
-            },
-            {
-              id: EventId.make("permissions:approval-item"),
-              type: "turn-item.updated",
-              threadId,
-              occurredAt: now,
-              payload: {
-                id: approvalItemId,
-                threadId,
-                runId: original.input.runId,
-                nodeId: approvalNodeId,
-                type: "approval_request",
-                status: "waiting",
-                requestId: approvalRequestId,
-                requestKind: "command",
-                providerThreadId: original.input.providerThread.id,
-                providerTurnId: original.providerTurnId,
-                nativeItemRef: null,
-                parentItemId: null,
-                ordinal: 100,
-                title: "Approve command",
-                startedAt: now,
-                completedAt: null,
-                updatedAt: now,
-              },
-            },
-            {
-              id: EventId.make("permissions:pending-command"),
-              type: "runtime-request.updated",
-              threadId,
-              occurredAt: now,
-              payload: {
-                id: approvalRequestId,
-                nodeId: approvalNodeId,
-                providerTurnId: original.providerTurnId,
-                nativeRequestRef: null,
-                kind: "command",
-                status: "pending",
-                responseCapability: {
-                  type: "live",
-                  providerSessionId: original.input.providerThread.providerSessionId!,
-                },
-                createdAt: now,
-                resolvedAt: null,
-              },
-            },
-          ],
-        });
-
-        const change = {
-          type: "thread.runtime-mode.set",
-          commandId: CommandId.make("permissions:full-access"),
-          threadId,
-          runtimeMode: "full-access",
-          applyImmediately: true,
-        } as const;
-        const restarted = scenario.restart ? yield* nextRunning() : null;
-        yield* orchestrator.dispatch(change);
-        if (restarted !== null) yield* Fiber.join(restarted);
-        yield* worker.drain();
-        const updated = yield* Ref.get(state);
-        if (!scenario.restart) {
-          assert.lengthOf(updated.started, 1);
-          assert.equal(updated.activeTurn?.input.runtimePolicy.runtimeMode, "approval-required");
-          assert.equal(updated.closedSessionCount, 0);
-          assert.equal(
-            (yield* orchestrator.getThreadProjection(threadId)).thread.runtimeMode,
-            "full-access",
-          );
-          return;
-        }
-        assert.lengthOf(updated.started, 2);
-        assert.equal(updated.activeTurn?.input.runtimePolicy.runtimeMode, "full-access");
-        assert.equal(updated.activeTurn?.input.providerThread.id, original.input.providerThread.id);
-        assert.equal(updated.activeTurn?.input.runId, original.input.runId);
-        assert.include(updated.activeTurn?.input.message.text ?? "", "Continue the current task");
-        if (scenario.reuseSession) assert.equal(updated.closedSessionCount, 0);
-        assert.equal(updated.opened.length, scenario.reuseSession ? 1 : 2);
-        yield* orchestrator.dispatch(change);
-        yield* worker.drain();
-        assert.lengthOf((yield* Ref.get(state)).started, 2);
-        const projection = yield* orchestrator.getThreadProjection(threadId);
-        assert.equal(projection.thread.runtimeMode, "full-access");
-        assert.lengthOf(projection.runs, 1);
-        assert.deepEqual(
-          projection.attempts.map((attempt) => attempt.status),
-          ["superseded", "running"],
-        );
-        assert.isFalse(projection.runtimeRequests.some((request) => request.status === "pending"));
-        assert.equal(
-          projection.nodes.find((node) => node.id === approvalNodeId)?.status,
-          "cancelled",
-        );
-        assert.equal(
-          projection.turnItems.find((item) => item.id === approvalItemId)?.status,
-          "cancelled",
-        );
-        for (const mode of ["auto-accept-edits", "auto", "approval-required"] as const) {
-          const restarting = yield* nextRunning();
-          yield* orchestrator.dispatch({
-            ...change,
-            commandId: CommandId.make(`permissions:${mode}`),
-            runtimeMode: mode,
-          });
-          yield* Fiber.join(restarting);
-          yield* worker.drain();
-          assert.equal((yield* Ref.get(state)).activeTurn?.input.runtimePolicy.runtimeMode, mode);
-        }
-        assert.lengthOf((yield* Ref.get(state)).started, 5);
-        yield* orchestrator.dispatch({
-          ...change,
-          commandId: CommandId.make("permissions:unchanged"),
-          runtimeMode: "approval-required",
-        });
-        yield* worker.drain();
-        assert.lengthOf((yield* Ref.get(state)).started, 5);
-        if (scenario.reuseSession) {
-          yield* orchestrator.dispatch({
-            type: "thread.runtime-mode.set",
-            commandId: CommandId.make("permissions:next-turn"),
-            threadId,
-            runtimeMode: "full-access",
-          });
-          yield* worker.drain();
-          assert.lengthOf((yield* Ref.get(state)).started, 5);
-          assert.equal(
-            (yield* Ref.get(state)).activeTurn?.input.runtimePolicy.runtimeMode,
-            "approval-required",
-          );
-          const reapplying = yield* nextRunning();
-          yield* orchestrator.dispatch({
-            ...change,
-            commandId: CommandId.make("permissions:apply-saved-mode"),
-          });
-          yield* worker.drain();
-          assert.lengthOf((yield* Ref.get(state)).started, 6);
-          yield* Fiber.join(reapplying);
-          assert.equal(
-            (yield* Ref.get(state)).activeTurn?.input.runtimePolicy.runtimeMode,
-            "full-access",
-          );
-        }
-        yield* orchestrator.dispatch({
-          type: "thread.stop",
-          commandId: CommandId.make("permissions:stop"),
-          threadId,
-        });
-        yield* orchestrator.dispatch({
-          ...change,
-          commandId: CommandId.make("permissions:while-stopping"),
-          runtimeMode: "auto",
-        });
-        yield* worker.drain();
-        assert.lengthOf((yield* Ref.get(state)).started, scenario.reuseSession ? 6 : 5);
-        assert.equal(
-          (yield* orchestrator.getThreadProjection(threadId)).thread.runtimeMode,
-          "auto",
-        );
-      }).pipe(
-        Effect.provide(
-          ProviderReplayHarness.layerWithRegistry(
-            { name: "permission-mode-restart" },
-            ProviderAdapterRegistry.layerSingle(
-              makeRestartAdapter(state, {
-                ...CodexProviderCapabilitiesV2,
-                sessions: {
-                  ...CodexProviderCapabilitiesV2.sessions,
-                  supportsRuntimeModeSwitchInSession: scenario.reuseSession,
-                },
-                turns: {
-                  ...CodexProviderCapabilitiesV2.turns,
-                  supportsSteeringByInterruptRestart: scenario.restart,
-                },
-              }),
-            ),
-          ),
-        ),
-      );
-    }),
-  ),
-);
 
 const driver = ProviderDriverKind.make("codex");
 const providerInstanceId = ProviderInstanceId.make("codex-restart-test");
@@ -1350,4 +996,93 @@ it.live.each(["active", "idle", "selection-command", "pooled", "separate-home"] 
         }).pipe(Effect.provide(ProviderReplayHarness.layerWithRegistry({ name }, layerRegistry)));
       }),
     ),
+);
+
+it.live("keeps a supervised turn running when the permission menu changes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const cwd = yield* checkpointWorkspace("permission-mode-live");
+      const threadId = ThreadId.make("thread:permission-mode-live");
+      const state = yield* Ref.make<RestartAdapterState>({
+        activeTurn: null,
+        opened: [],
+        started: [],
+        closedSessionCount: 0,
+        failedReplacementOpen: false,
+      });
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const sink = yield* EventSink.EventSinkV2;
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("live-mode:create"),
+          threadId,
+          projectId: ProjectId.make("project:live-mode"),
+          title: "Supervised task",
+          modelSelection: initialSelection,
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: cwd,
+          createdBy: "agent",
+          creationSource: "mcp",
+        });
+        const running = yield* sink
+          .stream({ threadId, afterSequence: yield* sink.latestSequence({ threadId }) })
+          .pipe(
+            Stream.filter(
+              ({ event }) =>
+                event.type === "provider-turn.updated" && event.payload.status === "running",
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("live-mode:start"),
+          threadId,
+          messageId: MessageId.make("live-mode:task"),
+          text: "Review the changes.",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "agent",
+          creationSource: "mcp",
+        });
+        yield* Fiber.join(running);
+        yield* worker.drain();
+        const before = yield* orchestrator.getThreadProjection(threadId);
+        for (const mode of ["full-access", "auto-accept-edits", "approval-required"] as const) {
+          const changed = yield* orchestrator.dispatch({
+            type: "thread.runtime-mode.set",
+            commandId: CommandId.make(`live-mode:${mode}`),
+            threadId,
+            runtimeMode: mode,
+            applyImmediately: true,
+          });
+          assert.isFalse(
+            changed.storedEvents.some(({ event }) => event.type === "run-attempt.created"),
+          );
+          yield* worker.drain();
+          const captured = yield* Ref.get(state);
+          assert.lengthOf(captured.started, 1);
+          assert.equal(captured.closedSessionCount, 0);
+          assert.equal(captured.activeTurn?.input.runtimePolicy.runtimeMode, "approval-required");
+          const current = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(current.thread.runtimeMode, mode);
+          assert.deepEqual(current.attempts, before.attempts);
+          assert.deepEqual(current.providerTurns, before.providerTurns);
+          assert.deepEqual(current.messages, before.messages);
+        }
+      }).pipe(
+        Effect.provide(
+          ProviderReplayHarness.layerWithRegistry(
+            { name: "permission-mode-live" },
+            ProviderAdapterRegistry.layerSingle(makeRestartAdapter(state)),
+          ),
+        ),
+      );
+    }),
+  ),
 );

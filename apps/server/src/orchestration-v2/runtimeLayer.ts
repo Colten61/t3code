@@ -1,6 +1,7 @@
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as IdleCompactionWorker from "./IdleCompactionWorker.ts";
 import * as FileChangeAutoDecline from "./FileChangeAutoDecline.ts";
+import * as RuntimeApprovalPolicy from "./RuntimeApprovalPolicy.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as Layer from "effect/Layer";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -408,6 +409,11 @@ export const layerProduction = Layer.mergeAll(
     Layer.provide(Layer.mergeAll(ProjectionStore.layer, layerThreadManagementProvided)),
   ),
   FileChangeAutoDecline.layer.pipe(Layer.provide(layerThreadManagementProvided)),
+  RuntimeApprovalPolicy.layerReactor.pipe(
+    Layer.provide(
+      Layer.mergeAll(layerThreadManagementProvided, layerProviderSessionManagerProvided),
+    ),
+  ),
   layerAgentQueueProvided,
   layerNightProvided,
   // FORK: blanks and cues in the composer.

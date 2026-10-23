@@ -656,6 +656,9 @@ function webSearchPatterns(item: CodexWebSearchItem): ReadonlyArray<string> {
 const decodeTurnApprovalPolicy = Schema.decodeUnknownEffect(
   Schema.Union([CodexSchema.V2TurnStartParams__AskForApproval, Schema.Null]),
 );
+const decodeLiveReviewApplied = Schema.decodeUnknownOption(
+  Schema.Struct({ status: Schema.Literal("applied") }),
+);
 const decodeTurnSandboxPolicy = Schema.decodeUnknownEffect(
   Schema.Union([CodexSchema.V2TurnStartParams__SandboxPolicy, Schema.Null]),
 );
@@ -1911,6 +1914,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           string,
           { readonly runtimeMode: RuntimeMode; readonly kinds: Set<ProviderRequestKind> }
         >();
+        const clearedApprovalModes = new Map<string, string>();
+        const liveReviewers = new Map<string, "user" | "auto_review">();
+        const attemptedApprovalUpdates = new Map<string, string>();
         /**
          * The allowed kinds for an approval request's turn. Read it when the
          * request arrives and add to that same set when the user answers, so a
@@ -6621,6 +6627,84 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ),
         };
 
+        const updateApprovalMode: NonNullable<
+          ProviderAdapter.ProviderAdapterV2SessionRuntime["updateApprovalMode"]
+        > = Effect.fn("CodexAdapterV2.updateApprovalMode")(
+          function* (
+            input: Parameters<
+              NonNullable<ProviderAdapter.ProviderAdapterV2SessionRuntime["updateApprovalMode"]>
+            >[0],
+          ): Effect.fn.Return<void, ProviderAdapter.ProviderAdapterV2Error> {
+            const rootId = yield* getNativeThreadId(input.providerThread);
+            const contexts = [...(yield* Ref.get(activeTurns)).values()].filter(
+              (context) =>
+                approvalOwnerCodexTurn(context).owner.providerThread.nativeThreadRef?.nativeId ===
+                  rootId && approvalOwnerCodexTurn(context).owner.input.runId === input.runId,
+            );
+            if (clearedApprovalModes.get(rootId) !== input.changeId) {
+              sessionApprovals.delete(rootId);
+              clearedApprovalModes.set(rootId, input.changeId);
+            }
+            for (const context of [...contexts, ...(yield* Ref.get(settledTurns)).values()]) {
+              if (
+                approvalOwnerCodexTurn(context).owner.providerThread.nativeThreadRef?.nativeId !==
+                rootId
+              )
+                continue;
+              const nativeId = context.providerThread.nativeThreadRef?.nativeId;
+              if (nativeId != null && clearedApprovalModes.get(nativeId) !== input.changeId) {
+                sessionApprovals.delete(nativeId);
+                clearedApprovalModes.set(nativeId, input.changeId);
+              }
+            }
+            for (const [nativeId, subagent] of yield* Ref.get(subagentThreads)) {
+              if (
+                approvalOwnerCodexTurn(subagent.parentContext).owner.providerThread.nativeThreadRef
+                  ?.nativeId === rootId &&
+                clearedApprovalModes.get(nativeId) !== input.changeId
+              ) {
+                sessionApprovals.delete(nativeId);
+                clearedApprovalModes.set(nativeId, input.changeId);
+              }
+            }
+            for (const context of contexts) {
+              const reviewer = input.runtimeMode === "auto" ? "auto_review" : "user";
+              const previous =
+                liveReviewers.get(context.nativeTurnId) ??
+                (context.input.runtimePolicy.runtimeMode === "auto" ? "auto_review" : "user");
+              if (reviewer === previous) continue;
+              if (attemptedApprovalUpdates.get(context.nativeTurnId) === input.changeId) continue;
+              attemptedApprovalUpdates.set(context.nativeTurnId, input.changeId);
+              // Newer Codex versions can publish the reviewer for later steps of an active turn.
+              // Sandbox settings and already pending native reviews remain unchanged.
+              yield* client.raw
+                .request("turn/settings/update", {
+                  threadId: context.providerThread.nativeThreadRef?.nativeId,
+                  turnId: context.nativeTurnId,
+                  approvalsReviewer: reviewer,
+                })
+                .pipe(
+                  Effect.timeout("2 seconds"),
+                  Effect.tap((result) =>
+                    Effect.sync(() => {
+                      if (Option.isSome(decodeLiveReviewApplied(result))) {
+                        liveReviewers.set(context.nativeTurnId, reviewer);
+                      }
+                    }),
+                  ),
+                  Effect.catchCause(() =>
+                    Effect.logWarning("codex.live-approval-reviewer-unavailable", {
+                      threadId: context.input.threadId,
+                    }),
+                  ),
+                );
+            }
+          },
+          Effect.mapError((cause) =>
+            toProtocolError("Failed to update live approval handling.", cause),
+          ),
+        );
+
         const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: adapterOptions.instanceId,
           driver: CODEX_PROVIDER,
@@ -7326,6 +7410,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               ),
           ),
+          updateApprovalMode,
           respondToRuntimeRequest: Effect.fn("CodexAdapterV2.respondToRuntimeRequest")(
             function* (requestInput) {
               const pending = (yield* Ref.get(pendingRuntimeRequests)).get(

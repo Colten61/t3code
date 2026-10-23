@@ -2955,6 +2955,136 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect.each(["applied", "unsupported"] as const)(
+    "changes live approval handling without restarting or retaining session grants (%s)",
+    (support) =>
+      Effect.gen(function* () {
+        const nativeThreadId = "live-approval-thread";
+        const nativeTurnId = "live-approval-turn";
+        const prompt = "Review changes.";
+        const request = (
+          id: number,
+          kind: "commandExecution" | "fileChange",
+          decision: string,
+        ): ReadonlyArray<CodexReplay.CodexAppServerReplayEntry> => [
+          {
+            type: "emit_inbound",
+            label: `approval ${id}`,
+            frame: {
+              id,
+              method: `item/${kind}/requestApproval`,
+              params: {
+                threadId: nativeThreadId,
+                turnId: nativeTurnId,
+                itemId: `item-${id}`,
+                startedAtMs: 1782622441000,
+                ...(kind === "commandExecution" ? { command: `cat item-${id}` } : {}),
+              },
+            },
+          },
+          { type: "expect_outbound", label: `decision ${id}`, frame: { id, result: { decision } } },
+        ];
+        const reviewer = (
+          id: number,
+          mode: "user" | "auto_review",
+        ): ReadonlyArray<CodexReplay.CodexAppServerReplayEntry> => [
+          {
+            type: "expect_outbound",
+            label: `reviewer ${mode}`,
+            frame: {
+              id,
+              method: "turn/settings/update",
+              params: {
+                threadId: nativeThreadId,
+                turnId: nativeTurnId,
+                approvalsReviewer: mode,
+              },
+            },
+          },
+          {
+            type: "emit_inbound",
+            label: `reviewer ${mode} applied`,
+            frame:
+              support === "applied"
+                ? { id, result: { status: "applied" } }
+                : { id, error: { code: -32601, message: "Method not found" } },
+          },
+        ];
+        const [lastCommand, lastDecision] = request(102, "commandExecution", "accept");
+        const transcript = makeCodexReplayTranscript({
+          scenario: "live-approval-mode",
+          entries: [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt }),
+            ...request(100, "commandExecution", "acceptForSession"),
+            ...request(101, "fileChange", "accept"),
+            lastCommand!,
+            ...reviewer(4, "auto_review"),
+            ...(support === "applied" ? reviewer(5, "user") : []),
+            lastDecision!,
+            {
+              type: "emit_inbound",
+              label: "completed",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const requests = yield* Queue.unbounded<OrchestrationV2RuntimeRequest>();
+        const harness = yield* makeCodexReplayHarness(transcript, (event) =>
+          event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending"
+            ? Queue.offer(requests, event.runtimeRequest)
+            : Effect.void,
+        );
+        const turnInput = makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("live-approval-attempt"),
+          text: prompt,
+        });
+        yield* harness.runtime.startTurn(turnInput);
+        const first = yield* Queue.take(requests);
+        yield* harness.runtime.respondToRuntimeRequest({
+          requestId: first.id,
+          decision: "acceptForSession",
+        });
+        const edit = yield* Queue.take(requests);
+        assert.equal(edit.kind, "file-change");
+        assert.isDefined(harness.runtime.updateApprovalMode);
+        yield* harness.runtime.updateApprovalMode!({
+          providerThread: harness.providerThread,
+          runtimeMode: "approval-required",
+          changeId: "supervised-live",
+          runId: turnInput.runId,
+        });
+        yield* harness.runtime.respondToRuntimeRequest({ requestId: edit.id, decision: "accept" });
+        const next = yield* Queue.take(requests);
+        assert.equal(next.kind, "command", "the old session grant must have been cleared");
+        for (const mode of ["auto", "approval-required"] as const) {
+          yield* harness.runtime.updateApprovalMode!({
+            providerThread: harness.providerThread,
+            runtimeMode: mode,
+            changeId: `live-${mode}`,
+            runId: turnInput.runId,
+          });
+        }
+        yield* harness.runtime.respondToRuntimeRequest({ requestId: next.id, decision: "accept" });
+        yield* harness.firstTerminal;
+        assert.lengthOf(harness.terminalEvents(), 1);
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
   it.effect("stops asking for commands the user allowed for the session", () =>
     Effect.scoped(
       Effect.gen(function* () {

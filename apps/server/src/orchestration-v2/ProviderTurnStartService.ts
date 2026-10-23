@@ -846,7 +846,6 @@ export const layer: Layer.Layer<
       };
       const runningRun: OrchestrationV2Run = {
         ...run,
-        runtimeModeAtStart: resolvedRuntimePolicy.runtimeMode,
         status: "running",
         startedAt: now,
       };

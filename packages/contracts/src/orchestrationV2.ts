@@ -391,6 +391,15 @@ export const OrchestrationV2AppThread = Schema.Struct({
   providerInstanceId: ProviderInstanceId,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
+  /** A user's approval choice applies only to this running root, not later turns. */
+  approvalOverride: Schema.optional(
+    Schema.Struct({
+      commandId: CommandId,
+      rootNodeId: NodeId,
+      providerInstanceId: ProviderInstanceId,
+      runtimeMode: RuntimeMode,
+    }),
+  ),
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
@@ -569,8 +578,6 @@ export const OrchestrationV2Run = Schema.Struct({
   ordinal: PositiveInt,
   providerInstanceId: ProviderInstanceId,
   modelSelection: ModelSelection,
-  /** The resolved preset passed to this attempt, independent of a later saved mode. */
-  runtimeModeAtStart: Schema.optional(RuntimeMode),
   providerThreadId: Schema.NullOr(ProviderThreadId),
   userMessageId: MessageId,
   rootNodeId: Schema.NullOr(NodeId),
@@ -3000,6 +3007,7 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     requestId: RuntimeRequestId,
     decision: Schema.optional(ProviderApprovalDecision),
+    approvalOverrideId: Schema.optional(CommandId),
     answers: Schema.optional(ProviderUserInputAnswers),
     attachmentsByQuestionId: Schema.optional(UserInputAttachments),
   }),

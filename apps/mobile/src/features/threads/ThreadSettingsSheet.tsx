@@ -879,7 +879,8 @@ function ThreadSettingsOptionsItem(props: {
           />
           <View className="px-5 pb-3">
             <Text className="text-xs text-foreground-muted">
-              Saved now. Active turns restart when supported; otherwise changes apply next turn.
+              Codex: Full access and Auto-accept edits handle requests now. Native permissions apply
+              next turn.
             </Text>
             {session.reportedPermissions ? (
               <Text className="text-xs text-foreground-muted">{permissionReport.detail}</Text>

@@ -1328,7 +1328,8 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
             <div className="max-w-80 px-3 py-2 text-xs text-muted-foreground">
               <p className="font-medium">Thread permissions</p>
               <p>
-                Saved now. Active turns restart when supported; otherwise changes apply next turn.
+                Codex: Full access and Auto-accept edits handle requests now. Native permissions
+                apply next turn.
               </p>
               {props.reportedPermissions ? <p>{permissionReport.detail}</p> : null}
               {permissionReport.approvalNotice ? <p>{permissionReport.approvalNotice}</p> : null}
@@ -1362,7 +1363,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
           </SelectPopup>
         </Select>
         <TooltipPopup side="top">
-          Active turns restart when supported; otherwise permissions change next turn.
+          Codex: handle received approvals now; apply native permissions next turn.
           {props.reportedPermissions ? ` ${permissionReport.detail}` : null}
           {permissionReport.approvalNotice ? ` ${permissionReport.approvalNotice}` : null}
         </TooltipPopup>
