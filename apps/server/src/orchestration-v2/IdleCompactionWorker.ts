@@ -9,6 +9,8 @@
 import {
   CommandId,
   MessageId,
+  resolveIdleCompaction,
+  resolveProjectProviderInstanceEnabled,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
@@ -26,6 +28,7 @@ import * as Stream from "effect/Stream";
 
 import { ProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -200,6 +203,7 @@ export const makeIdleCompactionWorker = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const registry = yield* ProviderInstanceRegistry;
+  const settings = yield* ServerSettings.ServerSettingsService;
 
   const due = new Map<ThreadId, IdleCompactionCandidate>();
   let seeded = false;
@@ -240,6 +244,16 @@ export const makeIdleCompactionWorker = Effect.gen(function* () {
     if (thread === null) return;
     const threadSkip = idleCompactionThreadSkip({ candidate, thread, nowMs });
     if (threadSkip !== null) return;
+    const currentSettings = yield* settings.getSettings;
+    if (
+      resolveIdleCompaction(currentSettings, thread.providerInstanceId) !== "beforeCacheExpires" ||
+      !resolveProjectProviderInstanceEnabled(
+        currentSettings,
+        thread.projectId,
+        thread.providerInstanceId,
+      )
+    )
+      return;
     const instance = yield* registry.getInstance(thread.providerInstanceId);
     const policy = instance?.idleCompaction === undefined ? null : yield* instance.idleCompaction;
     const records = yield* projections.getThreadRecords(candidate.threadId, [

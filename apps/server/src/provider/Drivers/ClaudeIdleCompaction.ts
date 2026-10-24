@@ -20,7 +20,12 @@ export function claudeIdleCompaction(input: {
   readonly usageLimits: ServerProviderUsageLimits | undefined;
   readonly nowMs: number;
 }): ProviderIdleCompaction | null {
-  if (!input.config.idleCompaction || input.claudeSetting === false) return null;
+  if (
+    input.config.idleCompaction === "off" ||
+    input.config.idleCompaction === "onReturn" ||
+    input.claudeSetting === false
+  )
+    return null;
   const nearLimit = (input.usageLimits?.windows ?? []).some(
     (window) =>
       window.usedPercent >= NEAR_LIMIT_PERCENT &&

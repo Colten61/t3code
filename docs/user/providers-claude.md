@@ -57,15 +57,22 @@ history for that message. The cache lasts about an hour on a Claude
 subscription and 5 minutes with an API key, Bedrock, or Vertex. See [commands and skills](./composer.md#commands-and-skills) for using
 composer commands.
 
-T3 Code also compacts a thread you left shortly before its one-hour cache
-expires, so coming back to it does not re-read the whole history. A thread
-holding at least 200,000 tokens is compacted and shows **Context compacted while
-idle**. It stays where it was in the sidebar or on the shelf. Settled, archived
-and snoozed threads, delegated tasks, and threads on a 5-minute cache are left
-alone, and nothing is compacted near a usage limit. Turn it off with **Compact
-idle threads** in the Claude provider settings, or change the threshold with
-**Compact idle threads from**. `"idleCompaction": false` in the config
-directory's `settings.json` turns it off too.
+**Compact idle threads** in **Settings > General** selects when Claude compacts
+large idle threads. Each Claude provider can override it:
+
+- **Before the cache expires (beta)** is the fork default. T3 compacts shortly
+  before the one-hour subscription cache expires, so returning does not reread
+  the whole conversation. The thread shows **Context compacted while idle**.
+- **When you return** offers the **Compact** chip before the next message.
+- **Never** skips idle compaction and the resume prompt. Manual `/compact` and
+  **Auto-compact after** still work.
+
+**Compact idle threads from** in the Claude provider settings changes the
+200,000-token threshold. Settled, archived and snoozed threads, delegated tasks,
+five-minute caches, pending merge-backs and accounts near a usage limit are left
+alone. An idle compaction keeps the thread's sidebar position and read state.
+`"idleCompaction": false` in Claude's config directory `settings.json` also
+turns automatic idle compaction off.
 
 ## Usage limits
 

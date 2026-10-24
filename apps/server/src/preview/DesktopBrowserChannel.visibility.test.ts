@@ -66,9 +66,11 @@ it.layer(NodeServices.layer)("DesktopBrowserChannel native visibility", (it) => 
         { type: "visibility", ...key, visible: false },
         { type: "visibility", ...key, visible: true },
         { type: "visibility", threadId: "other", tabId: "unknown", visible: true },
+        { type: "attached", threadId: "barrier", tabId: "barrier", visible: false },
       ]);
-      expect(yield* channel.awaitAttached(key, "1 second")).toBe(true);
-      yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+      expect(
+        yield* channel.awaitAttached({ threadId: "barrier", tabId: "barrier" }, "1 second"),
+      ).toBe(true);
       expect(channel.isVisible(key)).toBe(true);
       expect(channel.isVisible({ threadId: "other", tabId: "unknown" })).toBe(false);
     }).pipe(Effect.scoped),

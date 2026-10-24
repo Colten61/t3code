@@ -121,7 +121,13 @@ export function deriveStatusLine(input: {
 
 /** The snapshot's whole-thread total, else the compactions in the loaded items. */
 export function resolveCompactionCount(
-  projection: Pick<OrchestrationV2ThreadProjection, "compactionCount" | "turnItems"> | null,
+  projection:
+    | (Pick<OrchestrationV2ThreadProjection, "compactionCount"> & {
+        readonly turnItems: ReadonlyArray<
+          Pick<OrchestrationV2ThreadProjection["turnItems"][number], "type" | "status">
+        >;
+      })
+    | null,
 ): number {
   if (projection === null) return 0;
   if (projection.compactionCount !== undefined) return projection.compactionCount;

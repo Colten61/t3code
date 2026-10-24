@@ -1,5 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
+  DEFAULT_SERVER_SETTINGS,
+  ProviderDriverKind,
   ProviderInstanceId,
   RunId,
   ThreadId,
@@ -32,6 +34,7 @@ import {
 import { idleCompactionMayStart } from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 const threadId = ThreadId.make("thread-idle");
 const runId = RunId.make("run-1");
@@ -222,7 +225,17 @@ const makeHarness = Effect.gen(function* () {
   // The run's last request went out five minutes before it completed at 0.
   const requestedAtMs = yield* Ref.make(-5 * 60_000);
   const contextTransfers = yield* Ref.make<ReadonlyArray<OrchestrationV2ContextTransfer>>([]);
+  const settings = yield* Ref.make({
+    ...DEFAULT_SERVER_SETTINGS,
+    providerInstances: {
+      [modelSelection.instanceId]: {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        enabled: true,
+      },
+    },
+  });
   const layer = Layer.mergeAll(
+    Layer.mock(ServerSettings.ServerSettingsService)({ getSettings: Ref.get(settings) }),
     Layer.mock(ThreadManagement.ThreadManagementService)({
       getThreadShell: () => Ref.get(shell),
       dispatch: (command) =>
@@ -266,7 +279,7 @@ const makeHarness = Effect.gen(function* () {
     ),
   );
   const worker = yield* makeIdleCompactionWorker.pipe(Effect.provide(layer));
-  return { worker, dispatched, shell, lastVisitedAt, contextTransfers };
+  return { worker, dispatched, shell, lastVisitedAt, contextTransfers, settings };
 });
 
 /** Due two minutes before the cache of the run's last request, sent at -5 minutes, expires. */
@@ -286,6 +299,21 @@ const runEvent = (
   ({ type, threadId: payload.threadId, payload }) as unknown as OrchestrationV2DomainEvent;
 
 describe("IdleCompactionWorker", () => {
+  it.effect("honors the current global mode when an idle compaction becomes due", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      yield* setIdleShell(harness);
+      yield* harness.worker.onEvent(runEvent("run.updated", run()));
+      yield* Ref.update(harness.settings, (settings) => ({
+        ...settings,
+        idleCompaction: "off" as const,
+      }));
+      yield* TestClock.adjust(DUE_MS);
+      yield* harness.worker.runDueWork;
+      assert.lengthOf(harness.dispatched, 0);
+    }),
+  );
+
   it.effect("compacts a thread two minutes before its cache expires and keeps it seen", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness;

@@ -221,7 +221,7 @@ function TaskCard(props: {
           aria-label={`Select ${card.id}`}
         />
         <span className="min-w-0 flex-1 break-all font-mono">{card.id}</span>
-        <span className="shrink-0">{[card.pri, card.size].filter(Boolean).join(" · ") || "—"}</span>
+        <span className="shrink-0">{[card.pri, card.size].filter(Boolean).join(" · ") || "–"}</span>
       </div>
       <button
         type="button"
@@ -713,7 +713,7 @@ export function TasksPanel({ project, visible = true, onUseInChat, onExpand }: T
                       </div>
                     ) : null}
                   </td>
-                  <td className="p-2 @max-2xl:hidden">{card.pri ?? "—"}</td>
+                  <td className="p-2 @max-2xl:hidden">{card.pri ?? "–"}</td>
                   <td className="p-2 @max-2xl:hidden">{card.area}</td>
                   <td className="p-2">
                     <div className="flex flex-wrap gap-1">

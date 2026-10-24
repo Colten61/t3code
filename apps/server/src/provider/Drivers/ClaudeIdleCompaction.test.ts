@@ -7,7 +7,7 @@ import * as Path from "effect/Path";
 
 import { claudeIdleCompaction, readClaudeIdleCompactionSetting } from "./ClaudeIdleCompaction.ts";
 
-const config = { idleCompaction: true, idleCompactionMinTokens: "" };
+const config = { idleCompaction: "beforeCacheExpires" as const, idleCompactionMinTokens: "" };
 const window = (usedPercent: number, resetsAtMs?: number) => ({
   id: "five_hour",
   kind: "session" as const,
@@ -39,7 +39,8 @@ describe("claudeIdleCompaction", () => {
   });
 
   it("is off when the instance or Claude's own settings turn it off", () => {
-    assert.isNull(policy({ config: { ...config, idleCompaction: false } }));
+    assert.isNull(policy({ config: { ...config, idleCompaction: "off" } }));
+    assert.isNull(policy({ config: { ...config, idleCompaction: "onReturn" } }));
     assert.isNull(policy({ claudeSetting: false }));
     assert.deepEqual(policy({ claudeSetting: true }), { minTokens: 200_000 });
   });

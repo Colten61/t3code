@@ -61,13 +61,13 @@ describe("planTaskAgentLaunches", () => {
       [
         "Orchestrate these 2 cards from the catwolf-project TODO board:",
         [
-          "1. HOME-GEO-001 — Geo tab",
+          "1. HOME-GEO-001: Geo tab",
           "   Brief: Group sections by region",
           "   Card file: docs/todo/HOME-GEO-001.md",
           "   Start prompt: /take-card HOME-GEO-001",
         ].join("\n"),
         [
-          "2. HOME-BAND-002 — Band plan",
+          "2. HOME-BAND-002: Band plan",
           "   Card file: docs/todo/HOME-BAND-002.md",
           "   Start prompt: /take-card HOME-BAND-002",
         ].join("\n"),

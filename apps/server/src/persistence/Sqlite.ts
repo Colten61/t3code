@@ -10,9 +10,9 @@ import { initializeV2Database } from "./initializeV2Database.ts";
 import * as WalSync from "./WalSync.ts";
 import * as ServerConfig from "../config.ts";
 
-export const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
-// Page cache per connection in KiB (SQLite's default is 2 MiB for a 5 GB database).
-export const PAGE_CACHE_KIB = 64 * 1024;
+const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
+// Page cache per connection in KiB (SQLite defaults to 2 MiB).
+const PAGE_CACHE_KIB = 64 * 1024;
 
 const layerSetup = Layer.effectDiscard(
   Effect.gen(function* () {

@@ -364,7 +364,7 @@ function TryRow({ environmentId }: { readonly environmentId: EnvironmentId }) {
       const found = cues.cues.cues.map((cue) => {
         const quote = text.slice(cue.start, cue.end);
         const advice = cue.note.length > 0 ? cue.note : cue.alternatives.join(" / ");
-        return `${CUE_KIND_LABELS[cue.kind]}: “${quote}”${advice.length > 0 ? ` — ${advice}` : ""}`;
+        return `${CUE_KIND_LABELS[cue.kind]}: “${quote}”${advice.length > 0 ? `: ${advice}` : ""}`;
       });
       setLines(found.length > 0 ? found : ["No cues for this draft."]);
     });
@@ -542,8 +542,7 @@ export function ComposerAssistSettingsSections({
                   provider={selectedEntry.driverKind}
                   models={selectedEntry.models}
                   model={selection.model}
-                  prompt=""
-                  onPromptChange={() => {}}
+                  promptUltrathink="none"
                   modelOptions={assist.options}
                   allowPromptInjectedEffort={false}
                   planModeEnabled={false}

@@ -358,8 +358,7 @@ export function TaskAgentsDialog(props: {
                     provider={activeEntry.driverKind}
                     models={activeEntry.models}
                     model={selection.model}
-                    prompt=""
-                    onPromptChange={() => {}}
+                    promptUltrathink="none"
                     modelOptions={selection.options ?? []}
                     allowPromptInjectedEffort={false}
                     planModeEnabled={settings.planModeEnabled}

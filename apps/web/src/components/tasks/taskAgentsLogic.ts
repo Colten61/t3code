@@ -48,7 +48,7 @@ export function orchestratorMessage(
     const start =
       card.kind === "note" ? card.prompt : (card.prompt || `/take-card ${card.id}`).trim();
     return [
-      `${index + 1}. ${card.id} — ${card.title}`,
+      `${index + 1}. ${card.id}: ${card.title}`,
       ...(card.brief && card.brief !== card.title ? [`   Brief: ${card.brief}`] : []),
       ...(card.path ? [`   Card file: ${card.path}`] : []),
       `   Start prompt: ${start}`,
