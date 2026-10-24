@@ -303,6 +303,9 @@ should happen once all the work is done:
 - then run prompts you queue, one at a time, each in a new thread;
 - then power the computer off.
 
+Cards already in progress or closed cannot be selected for night work. Refresh the cards before
+starting; if a selected card is no longer available, remove that selection to continue.
+
 **Start the night** opens an overseer thread. It reads every working or waiting thread and asks you
 its questions in one batch. Answer them there, then open the moon again and press **I'm leaving**.
 If you don't, the night starts on its own when the time you chose runs out.

@@ -6,7 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { nightPromptTitle, planNightEnd } from "./nightPlanLogic";
+import { filteredNightCards, nightPromptTitle, planNightEnd } from "./nightPlanLogic";
 
 const card = (id: string, title: string): TodoBoardCard => ({
   id,
@@ -49,7 +49,52 @@ const plan = (input: Partial<Parameters<typeof planNightEnd>[0]>) =>
     ...input,
   });
 
+describe("filteredNightCards", () => {
+  it("keeps active and closed cards out of every status filter", () => {
+    const cards = [
+      card("READY", "Ready"),
+      { ...card("ACTIVE", "Active"), status: "in_progress" },
+      { ...card("CLOSED", "Closed"), status: "closed" },
+      { ...card("REMOTE", "Remote"), origin_only: true },
+      { ...card("BLOCKED", "Blocked"), status: "blocked" },
+      { ...card("NOTE", "Note"), kind: "note" as const, status: "backlog" },
+    ];
+    expect(
+      filteredNightCards(cards, { search: "", status: "", priority: "" }).map((item) => item.id),
+    ).toEqual(["READY", "BLOCKED", "NOTE"]);
+    expect(filteredNightCards(cards, { search: "", status: "in_progress", priority: "" })).toEqual(
+      [],
+    );
+  });
+
+  it("combines search, status and priority without changing board order", () => {
+    const cards = [
+      { ...card("FIRST", "One"), brief: "Database migration", pri: "P2" },
+      { ...card("OTHER", "Two"), brief: "Database migration", status: "blocked", pri: "P2" },
+      { ...card("LOWER", "Three"), brief: "Database migration", pri: "P3" },
+      { ...card("LAST", "Four"), area: "Database", pri: "P2" },
+    ];
+    expect(
+      filteredNightCards(cards, { search: " DATABASE ", status: "ready", priority: "P2" }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["FIRST", "LAST"]);
+  });
+});
+
 describe("planNightEnd", () => {
+  it.each([
+    { status: "in_progress", origin_only: false },
+    { status: "closed", origin_only: false },
+    { status: "ready", origin_only: true },
+  ])("refuses unavailable cards before composing either launch mode: %j", (fields) => {
+    for (const mode of ["separate", "orchestrator"] as const) {
+      expect(() => plan({ cards: [{ ...card("A-1", "One"), ...fields }], mode })).toThrow(
+        /unavailable/i,
+      );
+    }
+  });
+
   it("starts the picked cards the way Tasks does, never in plan mode", () => {
     const { agents } = plan({
       cards: [card("HOME-GEO-001", "Geo tab"), card("HOME-BAND-002", "Band plan")],

@@ -8,12 +8,38 @@ import type {
   TodoBoardCard,
 } from "@t3tools/contracts";
 
-import { planTaskAgentLaunches, type TaskAgentsMode } from "../tasks/taskAgentsLogic";
+import {
+  canStartTaskAgent,
+  planTaskAgentLaunches,
+  type TaskAgentsMode,
+} from "../tasks/taskAgentsLogic";
 
 export const NIGHT_BRIEFING_MINUTES = [5, 10, 15, 30, 60] as const;
 export const DEFAULT_NIGHT_BRIEFING_MINUTES = 15;
 
 const PROMPT_TITLE_LENGTH = 60;
+
+export function canStartNightCard(card: TodoBoardCard): boolean {
+  return canStartTaskAgent(card) && card.status !== "in_progress" && card.status !== "closed";
+}
+
+export function filteredNightCards(
+  cards: ReadonlyArray<TodoBoardCard>,
+  filters: { readonly search: string; readonly status: string; readonly priority: string },
+): ReadonlyArray<TodoBoardCard> {
+  const query = filters.search.trim().toLocaleLowerCase();
+  return cards.filter(
+    (card) =>
+      canStartNightCard(card) &&
+      (!filters.status || card.status === filters.status) &&
+      (!filters.priority || card.pri === filters.priority) &&
+      (!query ||
+        [card.id, card.title, card.brief, card.area, card.pack]
+          .join(" ")
+          .toLocaleLowerCase()
+          .includes(query)),
+  );
+}
 
 /** A queued prompt's thread is named after its first line. */
 export function nightPromptTitle(text: string): string {
@@ -44,6 +70,11 @@ export function planNightEnd(input: {
   readonly maxAgents?: number;
   readonly queue: ReadonlyArray<AgentLaunch>;
 } {
+  if (input.cards.some((card) => !canStartNightCard(card))) {
+    throw new Error(
+      "Selected cards are unavailable for night work. Refresh the cards and select again.",
+    );
+  }
   const base = {
     projectId: input.projectId,
     modelSelection: input.modelSelection,
@@ -73,7 +104,11 @@ export function planNightEnd(input: {
 }
 
 const clock = (iso: string) =>
-  new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  new Date(iso).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 
 /** One line for where the night stands. */
 export function nightStatusLabel(state: NightState): string {

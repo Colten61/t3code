@@ -44,10 +44,9 @@ import { buildThreadRouteParams } from "~/threadRoutes";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { scheduledTaskDefaultModel } from "../settings/scheduledTasksSettings.logic";
-import { inBoardOrder } from "../tasks/taskBoardLogic";
+import { inBoardOrder, taskStatusLabel } from "../tasks/taskBoardLogic";
 import { taskBoardState } from "../tasks/taskBoardStore";
 import {
-  canStartTaskAgent,
   DEFAULT_ORCHESTRATOR_INSTRUCTIONS,
   DEFAULT_TASK_AGENT_LIMIT,
   ORCHESTRATOR_INSTRUCTIONS_PATH,
@@ -76,6 +75,8 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import {
   DEFAULT_NIGHT_BRIEFING_MINUTES,
   NIGHT_BRIEFING_MINUTES,
+  canStartNightCard,
+  filteredNightCards,
   nightRuns,
   nightStatusLabel,
   planNightEnd,
@@ -159,17 +160,22 @@ function ModelChoice(props: {
 function CardChecklist(props: {
   readonly cards: ReadonlyArray<TodoBoardCard>;
   readonly selected: ReadonlySet<string>;
-  readonly onToggle: (id: string) => void;
+  readonly onChange: (selected: ReadonlySet<string>) => void;
 }) {
   const [filter, setFilter] = useState("");
-  const needle = filter.trim().toLowerCase();
-  const shown = props.cards.filter(
-    (card) =>
-      props.selected.has(card.id) ||
-      needle === "" ||
-      card.id.toLowerCase().includes(needle) ||
-      card.title.toLowerCase().includes(needle),
-  );
+  const [status, setStatus] = useState("");
+  const [priority, setPriority] = useState("");
+  const shown = filteredNightCards(props.cards, { search: filter, status, priority });
+  const statuses = [
+    ...new Set([...props.cards.map((card) => card.status), ...(status ? [status] : [])]),
+  ];
+  const priorities = [
+    ...new Set([
+      ...props.cards.flatMap((card) => (card.pri ? [card.pri] : [])),
+      ...(priority ? [priority] : []),
+    ]),
+  ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const selectedCount = props.cards.filter((card) => props.selected.has(card.id)).length;
   return (
     <div className="flex flex-col gap-1.5">
       <Input
@@ -179,6 +185,74 @@ function CardChecklist(props: {
         aria-label="Filter cards"
         onChange={(event) => setFilter(event.target.value)}
       />
+      <div className="grid grid-cols-2 gap-1.5">
+        <Select
+          value={status}
+          items={[
+            { value: "", label: "All available statuses" },
+            ...statuses.map((value) => ({ value, label: taskStatusLabel(value) })),
+          ]}
+          onValueChange={(value) => setStatus(value ?? "")}
+        >
+          <SelectTrigger size="sm" aria-label="Card status">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectPopup>
+            <SelectItem value="">All available statuses</SelectItem>
+            {statuses.map((value) => (
+              <SelectItem key={value} value={value}>
+                {taskStatusLabel(value)}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+        <Select
+          value={priority}
+          items={[
+            { value: "", label: "All priorities" },
+            ...priorities.map((value) => ({ value, label: value })),
+          ]}
+          onValueChange={(value) => setPriority(value ?? "")}
+        >
+          <SelectTrigger size="sm" aria-label="Card priority">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectPopup>
+            <SelectItem value="">All priorities</SelectItem>
+            {priorities.map((value) => (
+              <SelectItem key={value} value={value}>
+                {value}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Button
+          variant="outline"
+          size="xs"
+          disabled={!shown.some((card) => !props.selected.has(card.id))}
+          onClick={() =>
+            props.onChange(new Set([...props.selected, ...shown.map((card) => card.id)]))
+          }
+        >
+          Select shown
+        </Button>
+        <Button
+          variant="ghost"
+          size="xs"
+          disabled={props.selected.size === 0}
+          onClick={() => props.onChange(new Set())}
+        >
+          Clear selection
+        </Button>
+        <span className="text-xs text-muted-foreground" role="status">
+          {selectedCount} selected · {shown.length} shown
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Cards in progress or closed cannot be selected.
+      </p>
       <div className="max-h-44 overflow-y-auto rounded-md border">
         {shown.length === 0 ? (
           <p className="p-2 text-xs text-muted-foreground">No cards match.</p>
@@ -190,10 +264,17 @@ function CardChecklist(props: {
             >
               <Checkbox
                 checked={props.selected.has(card.id)}
-                onCheckedChange={() => props.onToggle(card.id)}
+                onCheckedChange={() => {
+                  const next = new Set(props.selected);
+                  if (!next.delete(card.id)) next.add(card.id);
+                  props.onChange(next);
+                }}
               />
               <span className="shrink-0 font-mono">{card.id}</span>
               <span className="min-w-0 truncate text-muted-foreground">{card.title}</span>
+              <span className="ml-auto shrink-0 text-muted-foreground">
+                {[card.pri, taskStatusLabel(card.status)].filter(Boolean).join(" · ")}
+              </span>
             </label>
           ))
         )}
@@ -240,9 +321,11 @@ function NightSetup(props: {
   );
   const snapshot = board.data?.available ? board.data.snapshot : null;
   const cards = snapshot
-    ? inBoardOrder([...snapshot.cards, ...snapshot.backlog_cards].filter(canStartTaskAgent))
+    ? inBoardOrder([...snapshot.cards, ...snapshot.backlog_cards].filter(canStartNightCard))
     : [];
   const pickedCards = cards.filter((card) => selectedCards.has(card.id));
+  const availableIds = new Set(cards.map((card) => card.id));
+  const unavailableSelections = [...selectedCards].filter((id) => !availableIds.has(id));
   const orchestrator = mode === "orchestrator" && pickedCards.length > 0;
   const instructionsFile = useEnvironmentQuery(
     orchestrator && snapshot
@@ -275,7 +358,15 @@ function NightSetup(props: {
     !overseerSelection ||
     end === null ||
     starting ||
-    (orchestrator && (instructionsFile.isPending || !isThreadInstructions(instructions)));
+    (selectedCards.size > 0 &&
+      (board.isPending ||
+        board.error !== null ||
+        snapshot === null ||
+        unavailableSelections.length > 0)) ||
+    (orchestrator &&
+      (instructionsFile.isPending ||
+        instructionsFile.error !== null ||
+        !isThreadInstructions(instructions)));
 
   const start = async () => {
     if (blocked || !overseerSelection || end === null) return;
@@ -359,20 +450,63 @@ function NightSetup(props: {
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>When all the work is done</Label>
+            {capabilities?.todoBoard === true ? (
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={board.refresh}
+                  disabled={board.isPending}
+                >
+                  {board.isPending ? <Spinner /> : null}
+                  Refresh cards
+                </Button>
+                {board.isPending ? (
+                  <span className="text-xs text-muted-foreground">Loading cards…</span>
+                ) : null}
+              </div>
+            ) : null}
+            {board.error ? (
+              <p role="alert" className="text-xs text-destructive">
+                Could not load cards: {board.error}
+              </p>
+            ) : null}
+            {board.data?.available === false ? (
+              <p className="text-xs text-muted-foreground">This project has no task board.</p>
+            ) : null}
+            {unavailableSelections.length > 0 && !board.isPending ? (
+              <div className="flex flex-col gap-1.5">
+                <p role="alert" className="text-xs text-muted-foreground">
+                  Selected cards are unavailable. Refresh the cards or remove these selections
+                  before starting: {unavailableSelections.join(", ")}.
+                </p>
+                <div>
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    onClick={() => setSelectedCards(new Set(pickedCards.map((card) => card.id)))}
+                  >
+                    Remove unavailable selections
+                  </Button>
+                </div>
+              </div>
+            ) : null}
             {snapshot ? (
               <>
                 <span className="text-xs text-muted-foreground">Start agents for these cards</span>
-                <CardChecklist
-                  cards={cards}
-                  selected={selectedCards}
-                  onToggle={(id) =>
-                    setSelectedCards((current) => {
-                      const next = new Set(current);
-                      if (!next.delete(id)) next.add(id);
-                      return next;
-                    })
-                  }
-                />
+                <CardChecklist cards={cards} selected={selectedCards} onChange={setSelectedCards} />
+                {orchestrator && instructionsFile.error ? (
+                  <div className="flex flex-col gap-1.5">
+                    <p role="alert" className="text-xs text-destructive">
+                      Could not read orchestrator instructions: {instructionsFile.error}
+                    </p>
+                    <div>
+                      <Button variant="outline" size="xs" onClick={instructionsFile.refresh}>
+                        Retry instructions
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
                 {pickedCards.length > 1 ? (
                   <ToggleGroup
                     aria-label="How to run the card agents"
