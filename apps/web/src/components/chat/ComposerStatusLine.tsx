@@ -110,6 +110,7 @@ export const ComposerStatusLine = memo(function ComposerStatusLine(props: {
     !turnRunning &&
     lastTurnCompletedAtMs !== null &&
     nowMs < lastTurnCompletedAtMs + ttlMs;
+  // oxlint-disable-next-line t3code/react-effect-budget -- Tick the prompt cache deadline until it expires, then release the timer.
   useEffect(() => {
     if (!countingDown) return;
     const id = setInterval(() => setNowMs(Date.now()), TICK_MS);

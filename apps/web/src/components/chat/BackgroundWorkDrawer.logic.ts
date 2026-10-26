@@ -160,13 +160,8 @@ export function finishedBackgroundWorkTitle(
   return `${joined} finished`;
 }
 
-/**
- * Calls `onRead` once a finished row has stayed on screen for `delayMs`.
- * A row can be mounted yet unseen (its drawer behind another notice in the
- * collapsed stack, or the row scrolled away), and an unseen row must not
- * count as read. While it intersects but is not shown (`visibility`/`opacity`
- * hide it), the check repeats, since showing it may not change its geometry.
- */
+// Mounted rows can be hidden by another notice or scrolled out. Repeat visibility checks
+// while intersecting because opacity and visibility can change without changing geometry.
 export function createReadWhenShown(input: {
   readonly delayMs: number;
   readonly isShown: () => boolean;

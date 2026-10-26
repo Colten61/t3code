@@ -1,23 +1,7 @@
-/**
- * FORK (T3MIG-FORK-014): work that lives in a Claude CLI process between turns
- * and dies with it, so an idle stop must wait for it: every live background
- * task the CLI reports (shells, monitors, subagents, workflows, MCP tasks, …)
- * and the session's crons (CronCreate, ScheduleWakeup, /loop), which wake the
- * process later.
- *
- * Tasks follow `background_tasks_changed`, the CLI's level: each one replaces
- * the set, and once a process has sent one, task edges are ignored. CLI
- * 2.1.296 sends it on every membership change. Without it the fallback fails
- * safe: a task seen starting holds until a level or the process exit clears
- * it, since an end edge carries no identity that tells a resumed task apart.
- *
- * Crons are read from the `session_crons` the CLI gives its Stop hook. They
- * are unknown, and hold, from the start of a process (it may restore crons
- * from an earlier session) and after a cron tool runs. The CLI runs the hook
- * before the turn's result, but the hook callback can overtake frames still
- * buffered in front of that result, so a report waits for the result frame
- * and covers everything before it.
- */
+// Every live task and session cron dies with its CLI process, so all hold an idle stop.
+// Task roster levels supersede edges; without a level, a start holds until process exit because
+// end edges cannot distinguish resumed tasks. Crons are unknown until a Stop report applies at
+// its result frame: the hook can overtake earlier buffered frames, and cron tools invalidate old reports.
 
 export interface ClaudeSessionCron {
   readonly id: string;

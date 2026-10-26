@@ -347,6 +347,7 @@ export function TasksPanel({ project, visible = true, onUseInChat, onExpand }: T
   const openFile = file?.projectKey === projectKey ? file : null;
   const navigate = useNavigate();
   const refresh = query.refresh;
+  // oxlint-disable-next-line t3code/react-effect-budget -- Refresh the server task board only while the panel and document are visible.
   useEffect(() => {
     if (!visible || !supported) return;
     const timer = window.setInterval(() => {
@@ -359,6 +360,7 @@ export function TasksPanel({ project, visible = true, onUseInChat, onExpand }: T
   const listShown = visible && snapshot !== null && openFile === null;
   // The list returns to where it was when it shows again: a card closed, the panel reopened or
   // remounted, another view.
+  // oxlint-disable-next-line t3code/react-effect-budget -- Restore the DOM scroll position when the saved task board view becomes visible.
   useLayoutEffect(() => {
     if (listShown && listRef.current)
       listRef.current.scrollTop = taskBoardScrollTop(projectKey, view);

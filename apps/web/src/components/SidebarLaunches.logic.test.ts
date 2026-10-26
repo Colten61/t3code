@@ -569,7 +569,14 @@ describe("resolveSidebarMoveState", () => {
     expect(resolveSidebarFamilyStatus("ready", true)).toBe("working");
     expect(resolveSidebarFamilyStatus("waiting", true)).toBe("working");
     expect(resolveSidebarFamilyStatus("ready", false)).toBe("ready");
-    for (const status of ["approval", "input", "failed", "limited", "working"] as const) {
+    for (const status of [
+      "approval",
+      "input",
+      "request",
+      "failed",
+      "limited",
+      "working",
+    ] as const) {
       expect(resolveSidebarFamilyStatus(status, true)).toBe(status);
     }
   });
@@ -582,6 +589,9 @@ describe("resolveSidebarMoveState", () => {
     expect(
       resolveSidebarMoveState({ ...base, status: "input", launcher: busyLauncher }),
     ).toMatchObject({ kind: "needs-you", tooltip: "Asked you a question" });
+    expect(
+      resolveSidebarMoveState({ ...base, status: "request", launcher: busyLauncher }),
+    ).toMatchObject({ kind: "needs-you", tooltip: "Waiting for your reply to a guest" });
     expect(
       resolveSidebarMoveState({
         ...base,
@@ -781,6 +791,7 @@ describe("sidebarThreadHoldsInbox", () => {
     };
     expect(sidebarThreadHoldsInbox(thread("a", { hasPendingApprovals: true }))).toBe(true);
     expect(sidebarThreadHoldsInbox(thread("b", { hasPendingUserInput: true }))).toBe(true);
+    expect(sidebarThreadHoldsInbox(thread("guest", { pendingGuestMessageCount: 1 }))).toBe(true);
     expect(
       sidebarThreadHoldsInbox(
         thread("c", { runtime: { ...runtime, status: "failed", lastError: "boom" } }),

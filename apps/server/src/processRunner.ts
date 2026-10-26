@@ -29,10 +29,7 @@ export interface ProcessRunInput {
   readonly maxOutputBytes?: number | undefined;
   readonly outputMode?: "error" | "truncate" | undefined;
   readonly truncatedMarker?: string | undefined;
-  /**
-   * On timeout, return a synthetic timedOut result.
-   * Partial stdout/stderr are not preserved.
-   */
+  /** Timed-out results discard partial stdout/stderr. */
   readonly timeoutBehavior?: "error" | "timedOutResult" | undefined;
 }
 
@@ -148,13 +145,8 @@ export class ProcessRunner extends Context.Service<
 const DEFAULT_TIMEOUT = "60 seconds";
 const DEFAULT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
-/**
- * `forceKillAfter` for children a caller waits on. When a timeout, interrupt
- * or shutdown stops one, its process group gets SIGTERM, then SIGKILL this long
- * after. The Node spawner never sends SIGKILL without it, so a child that
- * ignores SIGTERM would hold its caller, and any permit the caller has, until
- * it exits.
- */
+// The Node spawner needs forceKillAfter to escalate SIGTERM to SIGKILL for waited-on process groups.
+// Without it, an uncooperative child can hold the caller and its permits indefinitely.
 export const PROCESS_FORCE_KILL_AFTER = "1 second";
 
 export { isWindowsCommandNotFound } from "@t3tools/provider-core/server/snapshotProbe";
@@ -318,9 +310,7 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
     )
     .pipe(
       Effect.mapError(toSpawnError),
-      // Node's spawn can also throw synchronously, e.g. ENOTDIR when a PATH
-      // entry is a file. That arrives as a defect, which `mapError` never sees,
-      // so callers that recover from spawn failures would be bypassed.
+      // Synchronous spawn throws arrive as defects; recover them too so callers see typed spawn failures.
       Effect.catchDefect((cause) => Effect.fail(toSpawnError(cause))),
     );
 
@@ -400,7 +390,7 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
   } satisfies ProcessRunOutput;
 });
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.fn("ProcessRunner.make")(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 

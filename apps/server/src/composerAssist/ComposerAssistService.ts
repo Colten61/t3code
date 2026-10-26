@@ -1,8 +1,4 @@
-// FORK: composer assist, after OpenCues. A draft ending in " _" is rewritten or filled in, and a
-// pause in typing brings cues. This service picks the provider account, gives the model the thread's
-// recent turns, its decisions and the project's AGENTS.md rules, and checks what comes back. The
-// Claude process itself lives with the provider instance (Drivers/ClaudeComposerAssist.ts).
-// Drafts are private: nothing here logs their text.
+// Composer drafts stay private: never log their text. Claude processes belong to the provider instance.
 import {
   type ComposerAssistActivity,
   type ComposerAssistBlankResult,
@@ -334,7 +330,7 @@ export const make = Effect.gen(function* () {
       for (const { item } of page.items) {
         if (item.type === "user_message") {
           // Slash commands and T3's own idle compaction say nothing about the work.
-          if (item.idleCompaction === true || item.text.trim().startsWith("/")) continue;
+          if (item.idleCompaction !== undefined || item.text.trim().startsWith("/")) continue;
           messages.push({ role: "user", text: item.text });
         } else if (item.type === "assistant_message" && !item.streaming) {
           messages.push({ role: "agent", text: item.text });

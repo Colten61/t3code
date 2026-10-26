@@ -13,7 +13,6 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
@@ -107,7 +106,7 @@ const layerWithProjectGet = (get: ProjectStore.ProjectStoreV2["Service"]["get"])
     Layer.provide(Layer.mock(ProjectStore.ProjectStoreV2)({ get })),
   );
 
-const layerTest = layerWithProjectGet(() => Effect.succeed(Option.some(projectRow)));
+const layerTest = layerWithProjectGet(() => Effect.succeedSome(projectRow));
 
 // FORK: the night mode's rules, set and cleared the way NightService does.
 it.layer(layerTest.pipe(Layer.provideMerge(NightRules.layer)))("RuntimePolicyV2 at night", (it) => {

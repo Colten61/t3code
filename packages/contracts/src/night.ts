@@ -29,11 +29,9 @@ export const NightPlan = Schema.Struct({
 export type NightPlan = typeof NightPlan.Type;
 
 /**
- * briefing: the user is still here and answers one batch of questions.
- * night: the user is gone; questions that are theirs wait for the morning.
- * ending: the queued agents and prompts run.
- * report: the overseer writes the morning report.
- * done: nothing is left; the computer powers off if the plan says so.
+ * Questions are answered during briefing and held for morning during night.
+ * Ending runs the queued agents and prompts; report writes the morning report.
+ * Done powers off only when the plan requests it.
  */
 export const NightPhase = Schema.Literals(["briefing", "night", "ending", "report", "done"]);
 export type NightPhase = typeof NightPhase.Type;

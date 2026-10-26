@@ -6,14 +6,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 
-// FORK: the server commits with synchronous=NORMAL, where SQLite syncs the WAL
-// only at checkpoints (the checkpoint worker's, every 1,000 pages). Syncing it once a second bounds what a
-// power loss or OS crash can take to the last second (group commit), at one
-// fdatasync a second instead of one per commit; with nothing new to write, the
-// call does no I/O. A worker thread does it, so a main thread blocked in a
-// synchronous SQLite call (a busy wait lasts up to busy_timeout) cannot delay
-// it. Only the -wal is opened: SQLite keeps POSIX locks on the database and
-// -shm files, and closing any descriptor of those in this process would drop them.
+// NORMAL commits need a worker WAL sync each second to bound power-loss rollback without per-event fsyncs.
+// The worker stays responsive during main-thread SQLite busy waits; unchanged WALs need no I/O.
+// Open only the WAL: closing database or shm descriptors here would drop SQLite's POSIX locks.
 export const WAL_SYNC_INTERVAL = Duration.seconds(1);
 
 const WORKER_SOURCE = `

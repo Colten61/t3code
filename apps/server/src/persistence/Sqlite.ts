@@ -20,36 +20,25 @@ const layerSetup = Layer.effectDiscard(
     // CLI and server write from separate processes; wait rather than fail with SQLITE_BUSY.
     yield* sql`PRAGMA busy_timeout = 5000;`;
     yield* sql`PRAGMA foreign_keys = ON;`;
-    // Only an empty file can switch modes here; an existing database needs the
-    // offline VACUUM that `t3 doctor` runs, which rebuilds it with pointer maps.
+    // Existing databases need doctor's offline VACUUM to add pointer maps for this mode.
     const tables = yield* sql<{
       readonly count: number;
     }>`SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table'`;
     if (tables[0]?.count === 0) yield* sql`PRAGMA auto_vacuum = INCREMENTAL;`;
     yield* sql`PRAGMA journal_mode = WAL;`;
-    // FULL fsyncs the WAL on every commit, on the main thread. Every provider
-    // event is its own commit, so a slow or busy disk stalls the event loop
-    // and clients drop. In WAL mode NORMAL only fsyncs at checkpoints, and
-    // layerFromPath adds a WAL sync at most once a second (WalSync.ts): it
-    // cannot corrupt the database, an app crash loses nothing, and an OS crash
-    // or power loss can drop the last second of commits. Outbox claims and
-    // settlements still commit with FULL (EffectOutbox.ts).
+    // NORMAL avoids fsyncing every event on the main thread; WalSync syncs at most once a second.
+    // App crashes lose nothing; OS crashes or power loss can drop that second without corruption.
+    // Outbox claims and settlements still commit with FULL (EffectOutbox.ts).
     yield* sql`PRAGMA synchronous = NORMAL;`;
-    // Checkpoints sync the database, and macOS fsync() does not flush the
-    // drive cache. F_FULLFSYNC makes them reach disk; other platforms ignore it.
+    // macOS fsync misses drive caches; F_FULLFSYNC flushes them at checkpoints and is ignored elsewhere.
     yield* sql`PRAGMA checkpoint_fullfsync = ON;`;
     yield* sql.unsafe(`PRAGMA cache_size = -${PAGE_CACHE_KIB};`);
     yield* sql`PRAGMA temp_store = MEMORY;`;
-    // PASSIVE checkpoints never shrink the -wal file, so it otherwise keeps its
-    // largest size until the last connection closes.
+    // PASSIVE checkpoints retain peak WAL size until the last connection closes.
     yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
     yield* runMigrations();
-    // No planner statistics. Collecting them reads every page of the large
-    // tables, and stats taken while a table was small make the planner scan it
-    // once it grows. Without them SQLite assumes large tables and uses indexes;
-    // the few queries that still pick a worse index name theirs with INDEXED BY.
-    // Older builds collected stats, so clear them. A connection loads stats
-    // when it opens, so this one must reload them after the delete.
+    // Collecting stats scans every page, and stale small-table stats cause scans after growth; use indexes by default.
+    // Connections cache stats; reload after deleting them.
     const statTables = yield* sql`SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'`;
     if (statTables.length > 0) {
       yield* sql`DELETE FROM sqlite_stat1;`;
@@ -70,9 +59,7 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
       NodeSqliteClient.layer({
         filename: dbPath,
         readerWorker: true,
-        // Checkpoints sync the database, with F_FULLFSYNC on macOS. Run them off
-        // the event loop so a slow flush cannot stall clients. The worker owns
-        // checkpointing: it turns the writer's wal_autocheckpoint off.
+        // Run checkpoint fsyncs off the event loop so slow disk flushes cannot stall clients.
         checkpointWorker: true,
         spanAttributes: {
           "db.name": path.basename(dbPath),

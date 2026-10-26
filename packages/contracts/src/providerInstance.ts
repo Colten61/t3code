@@ -61,18 +61,10 @@ export const ProviderInstanceCappedCapability = Schema.Literals([
 export type ProviderInstanceCappedCapability = typeof ProviderInstanceCappedCapability.Type;
 
 /**
- * The most any thread on this instance may be granted, whoever starts it and
- * whatever its parent's own mode. Every field is optional and an absent cap
- * changes nothing.
- *
- *   - `maxRuntimeMode`: threads on the instance run at most this mode; a
- *     delegation that asks for more is refused, one that inherits more is
- *     lowered.
- *   - `declineFileChanges`: file-change approvals are declined without asking
- *     the user. Only Supervised asks before edits, so it also caps the mode
- *     at `approval-required`.
- *   - `withheldCapabilities`: T3 MCP capabilities the instance's sessions
- *     never get (e.g. `orchestration`: no `delegate_task` or thread control).
+ * Caps apply regardless of who starts the thread or its parent's permissions.
+ * Explicitly requesting a higher mode fails; an inherited mode is lowered.
+ * Declining file changes also requires approval-required mode.
+ * Withheld capabilities never reach this instance's MCP sessions.
  */
 export const ProviderInstanceHardCap = Schema.Struct({
   maxRuntimeMode: Schema.optionalKey(RuntimeMode),
@@ -81,12 +73,7 @@ export const ProviderInstanceHardCap = Schema.Struct({
 });
 export type ProviderInstanceHardCap = typeof ProviderInstanceHardCap.Type;
 
-/**
- * The driver-specific config payload is left as `Schema.Unknown`; each driver
- * registers its own decoder with the runtime registry, and envelopes for
- * unknown drivers are preserved verbatim so they round-trip across version
- * changes without data loss.
- */
+/** Drivers decode their own config; unknown-driver envelopes round-trip verbatim across versions. */
 export const ProviderInstanceConfig = Schema.Struct({
   driver: ProviderDriverKind,
   displayName: Schema.optional(TrimmedNonEmptyString),
@@ -119,11 +106,6 @@ export type ProviderInstanceMutation = typeof ProviderInstanceMutation.Type;
 export const ProviderInstanceConfigMap = Schema.Record(ProviderInstanceId, ProviderInstanceConfig);
 export type ProviderInstanceConfigMap = typeof ProviderInstanceConfigMap.Type;
 
-/**
- * The legacy single-instance-per-driver world used the driver kind itself as
- * the instance id; preserving that mapping keeps existing persisted threads,
- * bindings, and cache files routable across the migration without rewriting
- * their stored selection payloads.
- */
+/** Driver-kind ids keep stored selections routable without migration. */
 export const defaultInstanceIdForDriver = (driver: ProviderDriverKind): ProviderInstanceId =>
   ProviderInstanceId.make(driver);

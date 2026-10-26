@@ -18,14 +18,8 @@ import {
   shouldAutoDeclineRuntimeRequest,
 } from "./ProviderInstanceHardCap.ts";
 
-/**
- * The approval-required allowlist path. The MCP live check saw no approval
- * prompt only because its children ran with full access; a capped child runs
- * Supervised. Under the cap, T3's own `t3-code` tools stay pre-approved for
- * Claude while every other tool goes through the approval callback, an ACP
- * child (agy) asks before edits and MCP tool calls, and its file changes are
- * declined for the user.
- */
+// Capped children run Supervised: Claude pre-approves only T3 tools, ACP asks before edits and MCP,
+// and declining instances reject file changes. Full-access children cannot prove this path.
 const cap: ProviderInstanceHardCap = {
   maxRuntimeMode: "approval-required",
   declineFileChanges: true,

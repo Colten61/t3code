@@ -1,11 +1,6 @@
-/**
- * FORK: compacts a Claude thread left idle shortly before its one-hour prompt cache expires, so the
- * next message does not re-read all of its context uncached. Claude Code does this itself only in a
- * terminal, never for an SDK session like T3's. The cache's clock starts with Claude's latest
- * request, and T3 may first resume a session the idle stop released, so it starts the compaction
- * two minutes before that request's cache expires. Once the cache is gone, compacting would cost as
- * much as the message it saves.
- */
+// Claude SDK sessions do not compact idle context themselves; compact two minutes before cache expiry.
+// Measure from the latest request, including fully cached requests and sessions resumed after idle stop.
+// Skip expired caches: compaction would cost as much as the next message.
 import {
   CommandId,
   MessageId,

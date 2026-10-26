@@ -11,18 +11,8 @@ import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
-/**
- * Declines file-change approvals on provider instances whose hard cap sets
- * `declineFileChanges`, without asking the user. It sends the command the
- * user's own Decline sends, so the thread shows the request declined and the
- * provider carries on as after a user's decline. The command id is derived
- * from the request, so a replayed event cannot answer twice.
- *
- * This answers the request; it does not guard it. The orchestrator refuses
- * any other answer to a file-change request on a declining instance when it
- * is given (`refusesFileChangeResponse`), so an Accept that arrives before
- * this Decline, or one for a request pending from before the cap, fails.
- */
+// Use the normal Decline command with a request-derived id so replay cannot answer twice.
+// This worker answers requests; refusesFileChangeResponse enforces the cap against racing or stale Accepts.
 export const declineCommandFor = (
   event: Extract<OrchestrationV2DomainEvent, { readonly type: "runtime-request.updated" }>,
 ) =>

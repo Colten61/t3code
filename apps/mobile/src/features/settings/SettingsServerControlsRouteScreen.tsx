@@ -19,7 +19,7 @@ import {
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
   type ProjectScopedServerSettingKey,
 } from "@t3tools/contracts";
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -207,8 +207,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
   );
   const [pendingWrites, setPendingWrites] = useState(0);
   const writeInFlight = useRef(false);
-  // A closing view can still save its drafts while a write is pending, after
-  // the controls disabled. Those patches run once the current write settles.
+  // Closing views can save after controls disable; queue those patches behind the pending write.
   const queuedPatch = useRef<{ key: string; patch: ServerSettingsPatch } | null>(null);
   const targetsKey = targets
     .map((target) => `${target.environment.environmentId}:${target.projectId}`)
@@ -244,7 +243,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
           reference.settings.composerAssist,
           providersByEnvironment.get(reference.environment.environmentId) ?? [],
         );
-  const composerAssistModels = useMemo(() => {
+  const composerAssistModels = (() => {
     const catalogs = displayTargets.map((target) => {
       const supported = {
         ...target.environment.serverConfig,
@@ -261,7 +260,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
     return [...(catalogs[0]?.values() ?? [])].filter((model) =>
       catalogs.every((catalog) => catalog.get(model.key)?.providerDriver === model.providerDriver),
     );
-  }, [displayTargets, providersByEnvironment]);
+  })();
   const renderComposerAssistSwitches = (group: "blanks" | "cues") =>
     COMPOSER_ASSIST_SWITCHES.filter((item) => item.group === group).map((item, index) => (
       <View key={item.key} className={index > 0 ? "border-t border-border-subtle" : undefined}>
@@ -480,7 +479,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     <SettingsSwitchRow
                       icon={PullRequestGlyph.merged}
                       label="Remove agent credits when merging"
-                      subtitle="Remove recognized agent credits from GitHub merge and squash messages, keeping human co-authors. Includes auto-merge. Excludes merge queues, stack merges, and existing commits."
+                      subtitle="Remove recognized agent credits from merge and squash messages on hosts that support it, keeping human co-authors. Includes auto-merge. Excludes merge queues, stack merges, and existing commits."
                       value={uniform("removeAgentCreditsOnMerge")}
                       disabled={disabledFor("removeAgentCreditsOnMerge")}
                       onValueChange={(value) => write({ removeAgentCreditsOnMerge: value })}
@@ -712,12 +711,8 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                           label={target.label}
                           value="Server and provider updates"
                           onPress={() =>
-                            navigation.navigate("SettingsSheet", {
-                              screen: "SettingsContent",
-                              params: {
-                                screen: "SettingsEnvironmentDetail",
-                                params: { environmentId: target.environmentId },
-                              },
+                            navigation.navigate("SettingsEnvironmentDetail", {
+                              environmentId: target.environmentId,
                             })
                           }
                         />

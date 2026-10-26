@@ -18,13 +18,8 @@ import * as Schema from "effect/Schema";
 import type { McpCapability } from "../mcp/McpInvocationContext.ts";
 import type { ServerSettingsService } from "../serverSettings.ts";
 
-/**
- * A provider instance's hard cap (`providerInstances.<id>.hardCap` in server
- * settings): the most any thread on that instance may be granted, whoever
- * starts it and whatever its parent's own mode. A delegation is otherwise
- * capped only by its parent, so a full-access parent could hand a weaker
- * agent full access too. Absent fields cap nothing.
- */
+// Instance caps bound every thread, regardless of its parent's access or who starts it.
+// Without this bound a full-access parent could delegate full access to a weaker agent.
 
 const RUNTIME_MODE_RANK: Record<RuntimeMode, number> = {
   "approval-required": 0,
@@ -144,13 +139,8 @@ export const UNKNOWN_HARD_CAP: ProviderInstanceHardCap = {
   withheldCapabilities: Object.keys(CAPPED_CAPABILITIES) as Array<ProviderInstanceCappedCapability>,
 };
 
-/**
- * The hard caps in force, looked up by instance id ({@link hardCapFor}).
- * From valid settings, `byInstance` holds the capped instances and the rest
- * cap nothing. From remembered caps (settings broken), `byInstance` holds
- * every instance the last valid settings knew, an uncapped one as `{}`, and
- * any other instance runs under the strictest cap.
- */
+// Valid settings cap only listed instances. Remembered settings retain known uncapped instances as {},
+// while unknown instances receive the strictest cap when settings cannot be read.
 export interface ProviderInstanceHardCaps {
   readonly byInstance: Readonly<Record<string, ProviderInstanceHardCap>>;
   /** The cap of an instance `byInstance` does not name. */
@@ -209,15 +199,9 @@ export const providerInstanceHardCapInForce = (
     ),
   );
 
-/**
- * The caps remembered beside the settings file, written before every save
- * and whenever valid settings load, so a settings file that later fails to
- * decode or read keeps its instances capped instead of falling back to
- * defaults without any. It names every instance the settings knew, built-in
- * default instances included, so an uncapped one stays uncapped and an
- * unknown one is capped strictest. Each entry keeps its driver so a built-in
- * instance that only the defaults describe can carry its cap.
- */
+// Persist caps before saves and after valid loads so broken settings cannot remove restrictions.
+// Record every known instance and driver, including built-in defaults: known uncapped instances stay
+// uncapped; unknown instances receive the strictest cap.
 export const RememberedHardCaps = Schema.Struct({
   instances: Schema.Record(
     Schema.String,
@@ -276,15 +260,8 @@ export function rememberedHardCapsInForce(
   return { byInstance, otherwise: UNKNOWN_HARD_CAP };
 }
 
-/**
- * Puts remembered caps back on settings that came from defaults, so the
- * settings page shows them and a save from this state keeps them. An instance
- * the settings list gets its cap; a built-in driver's default instance, which
- * the registry builds when no entry names it, gets the same entry the registry
- * would build, with the cap. Other remembered
- * instances are not added back; their caps still hold by id through
- * {@link rememberedHardCapsInForce}.
- */
+// Restore remembered caps to listed and default built-in instances so Settings shows and preserves them.
+// Do not recreate other instances; rememberedHardCapsInForce still enforces their caps by id.
 export function withRememberedHardCaps(
   settings: ServerSettings,
   remembered: RememberedHardCaps,

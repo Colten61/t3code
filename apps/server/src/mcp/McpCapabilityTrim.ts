@@ -7,14 +7,8 @@ import type {
 import { hardCapWithheldCapabilities } from "../provider/ProviderInstanceHardCap.ts";
 import type { McpCapability, McpInvocationScope } from "./McpInvocationContext.ts";
 
-/**
- * Which T3 MCP capabilities a provider session is minted without, beyond the
- * user's browser and device access settings.
- *
- * A delegated task's role lives only in the prompt T3 writes for the child,
- * so the role is read back from that prompt. A parent that writes the role
- * line by hand only takes capabilities away from its own child.
- */
+// Delegation roles exist only in child prompts, so capability trimming reads them back.
+// A manually written role line can only remove the child's capabilities.
 
 const rolePrefix = (role: NonNullable<OrchestratorMcpDelegateTaskInput["role"]>) =>
   `Act as the ${role} sub-agent for this task.\n\n`;

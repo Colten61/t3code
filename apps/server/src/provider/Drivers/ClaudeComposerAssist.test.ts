@@ -53,6 +53,7 @@ const setup = (mode: "echo" | "silent" | "error" | "model") =>
     const assist = yield* makeClaudeComposerAssist({
       binaryPath,
       environment: { ...process.env, FAKE_CLAUDE_LOG: log, FAKE_CLAUDE_MODE: mode },
+      // @effect-diagnostics-next-line effectSucceedWithVoid:off -- An absent optional usage report requires undefined, not void.
       usageLimits: Effect.succeed(undefined),
     });
     const starts = fs.readFileString(log).pipe(

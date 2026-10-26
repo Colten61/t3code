@@ -193,6 +193,7 @@ function ActivityRow({ environmentId }: { readonly environmentId: EnvironmentId 
     });
   };
   const refreshOnEnvironment = useEffectEvent(refresh);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Read server activity when the selected environment changes.
   useEffect(() => {
     refreshOnEnvironment(environmentId);
   }, [environmentId]);

@@ -1,10 +1,5 @@
-// FORK (T3MIG-FORK-013): threads an agent opened with t3_thread_launch or
-// create_threads sit under the thread that launched them, and every row says
-// whose move it is. The server records the launcher as `launchedByThreadId`
-// (older threads: read off their launch message), not as lineage, so forks
-// and mobile back navigation are untouched. FORK: subagents nest in the same
-// forest under their lineage parent; they never get a place of their own and
-// follow their parent's. Mobile still hides them.
+// Agent-launched threads nest under their launcher; subagents nest under their lineage parent.
+// Forks and mobile navigation keep their existing lineage behavior.
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { isLatestRunSettled } from "../session-logic";
 import type { SidebarThreadSummary } from "../types";
@@ -21,13 +16,7 @@ export function sidebarLaunchThreadKey(
   return scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
 }
 
-/**
- * Key of the thread a launched thread answers to: its launcher, or the
- * launcher's nearest non-subagent ancestor when a subagent made the call,
- * since a subagent's row only follows its parent's place. Null for threads a
- * person made and for launchers this client does not know (deleted, or not
- * loaded yet).
- */
+/** Launchers that are subagents resolve to their nearest non-subagent ancestor. */
 export function resolveSidebarLauncherKey(
   thread: LaunchThread,
   threadByKey: ReadonlyMap<string, LaunchThread>,
@@ -56,13 +45,8 @@ export function sidebarLaunchPlacement(section: SidebarSection): SidebarLaunchPl
   return section === "active" || section === "working" ? "inbox" : section;
 }
 
-/**
- * A launched thread nests only where it would sit anyway, or in the inbox
- * under a pinned parent. A pinned, snoozed or settled child keeps the place
- * the user gave it, and a live child never hides in a snoozed or settled
- * parent's shelf. FORK: a finished child goes on the Shelf with its parent,
- * since shelving settles the threads that worked for it.
- */
+// Launched children keep their own placement or nest in the inbox under a pinned parent.
+// Settled children follow a shelved parent because shelving settles its working family.
 export function canNestSidebarLaunch(
   child: SidebarLaunchPlacement,
   parent: SidebarLaunchPlacement,
@@ -88,15 +72,8 @@ const EMPTY_FOREST: SidebarLaunchForest = {
   subagentKeys: new Set(),
 };
 
-/**
- * Nest each visible launched thread under its visible launcher. Only the
- * threads the sidebar shows take part, so nesting keeps the project scope;
- * a child launched into another project than its launcher's stays where it is.
- *
- * Subagents nest under their lineage parent wherever it sits, at any depth.
- * One whose chain of parents reaches no row (another project, archived, not
- * loaded) stays hidden: a subagent never becomes a root.
- */
+// Nest within the visible project scope. Subagents without a loaded, unarchived
+// ancestor row stay hidden and never become roots.
 export function buildSidebarLaunchForest<
   T extends LaunchThread & { readonly createdAt: string },
 >(input: {
@@ -124,7 +101,7 @@ export function buildSidebarLaunchForest<
   }
   // A launch cycle cannot happen through the tools, but corrupt data must not
   // hide every thread in it: break each cycle at the thread that closes it.
-  for (const childKey of [...parentKeyByChildKey.keys()]) {
+  for (const childKey of parentKeyByChildKey.keys()) {
     const seen = new Set([childKey]);
     let cursor = parentKeyByChildKey.get(childKey);
     while (cursor !== undefined) {
@@ -255,13 +232,8 @@ export interface SidebarLaunchSections<T> {
 
 const SIDEBAR_SECTIONS = ["pinned", "active", "working", "snoozed", "shelved", "settled"] as const;
 
-/**
- * Take nested threads out of the sections, which then hold only the rows the
- * drag and drop list arranges; their children render under them. A group
- * whose root folded into the Working shelf comes back to the inbox while
- * a launched thread in it waits for the user, the way that thread alone
- * would. A subagent's questions already show on its parent, so it never does.
- */
+// Sections hold draggable roots; their children render beneath them. A launched thread
+// needing the user lifts its group into the inbox; subagent questions surface on their parent.
 export function nestSidebarLaunchedThreads<
   T extends LaunchThread & { readonly createdAt: string },
 >(input: {
@@ -371,7 +343,11 @@ export interface SidebarLaunchGroupDefaults {
 
 function isSidebarStatusBusy(status: SidebarThreadStatus): boolean {
   return (
-    status === "working" || status === "waiting" || status === "approval" || status === "input"
+    status === "working" ||
+    status === "waiting" ||
+    status === "approval" ||
+    status === "input" ||
+    status === "request"
   );
 }
 
@@ -546,7 +522,8 @@ type InboxHoldInput = Pick<
   | "interactionMode"
   | "latestRun"
   | "runtime"
->;
+> &
+  Partial<Pick<SidebarThreadSummary, "pendingGuestMessageCount">>;
 
 export function hasSidebarPlanPrompt(thread: InboxHoldInput): boolean {
   return (
@@ -566,6 +543,7 @@ export function sidebarThreadHoldsInbox(thread: InboxHoldInput): boolean {
   return (
     thread.hasPendingApprovals ||
     thread.hasPendingUserInput ||
+    (thread.pendingGuestMessageCount ?? 0) > 0 ||
     thread.runtime?.status === "failed" ||
     hasSidebarPlanPrompt(thread)
   );
@@ -618,16 +596,8 @@ export interface SidebarMoveLauncher {
   readonly status: SidebarThreadStatus;
 }
 
-/**
- * Whose move a row's pill names. The pill shows exactly when it shows today:
- * a stopped thread gets one only while its completion is unread (see
- * isSidebarMoveUnread for launched threads), and failed or limited threads
- * keep their own pills (null here).
- *
- * "Waiting" today means the run stopped while background work it started
- * (subagents, monitors) will wake it: still the thread's own move, so it
- * reads Working, and the tooltip says what it waits on.
- */
+// Failed and limited rows keep their own pills. Finished rows show whose move is next
+// while unread; a plan the user must review takes precedence over its launcher.
 export function resolveSidebarMoveState(input: {
   readonly status: SidebarThreadStatus;
   readonly isUnread: boolean;
@@ -658,6 +628,8 @@ export function resolveSidebarMoveState(input: {
       };
     case "approval":
       return { kind: "needs-you", reason: "approval", tooltip: "Waiting for your approval" };
+    case "request":
+      return { kind: "needs-you", reason: "input", tooltip: "Waiting for your reply to a guest" };
     case "input":
       return { kind: "needs-you", reason: "input", tooltip: "Asked you a question" };
     case "failed":
@@ -740,23 +712,15 @@ export interface SidebarLaunchGroupMember {
   readonly subagent?: boolean;
 }
 
-/**
- * A nested thread's state for its parent's summary. Unlike the row pill it
- * does not fade once read: a finished child someone opened is still waiting
- * on its orchestrator. Only the plan prompt keeps the pill's timing, so a
- * plan the user already read does not keep lifting.
- *
- * A subagent counts only while it works or asks: its result and its failure
- * are its parent's to read, and its questions already show on the parent, so
- * it has no move to lift.
- */
+// Finished children keep waiting on their launcher after being read; only unread plans lift.
+// Subagents lift only while working or asking, since their parent owns their results.
 export function resolveSidebarLaunchMemberState(member: SidebarLaunchGroupMember): {
   readonly state: SidebarLaunchGroupState | null;
   readonly move: SidebarMoveState | null;
 } {
   if (member.subagent === true) {
     const state =
-      member.status === "approval" || member.status === "input"
+      member.status === "approval" || member.status === "input" || member.status === "request"
         ? "needs-you"
         : member.status === "working" || member.status === "waiting"
           ? "working"

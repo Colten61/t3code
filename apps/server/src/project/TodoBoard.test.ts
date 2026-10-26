@@ -71,8 +71,8 @@ const withBoard = Effect.fnUntraced(function* (
         ),
       apply: () => Effect.void,
       list: () => Effect.succeed([]),
-      findActiveByWorkspaceRoot: () => Effect.succeed(Option.none()),
-      getShell: () => Effect.succeed(Option.none()),
+      findActiveByWorkspaceRoot: () => Effect.succeedNone,
+      getShell: () => Effect.succeedNone,
       listShells: () => Effect.succeed([]),
     }),
     Layer.succeed(ProcessRunner.ProcessRunner, {

@@ -247,7 +247,7 @@ describe("V2 session presentation", () => {
     expect(targets.has(steerMessageId)).toBe(false);
   });
 
-  it("shows T3's idle compaction as its compaction, without the /compact message", () => {
+  it("retains the idle compaction trigger for the timeline presentation", () => {
     const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
     const threadId = ThreadId.make("thread-idle");
     const runId = RunId.make("run-idle-compact");
@@ -276,7 +276,7 @@ describe("V2 session presentation", () => {
       attachments: [],
       createdBy: "system" as const,
       creationSource: "server" as const,
-      idleCompaction: true as const,
+      idleCompaction: "beforeCacheExpires" as const,
     } satisfies OrchestrationV2TurnItem;
     const compaction = {
       ...base("item-compaction", 1),
@@ -295,10 +295,16 @@ describe("V2 session presentation", () => {
       })),
       optimisticMessages: [],
     });
-    expect(entries.map((entry) => [entry.kind, entry.id])).toEqual([["work", compaction.id]]);
-    const [entry] = entries;
+    expect(entries.map((entry) => [entry.kind, entry.id])).toEqual([
+      ["message", compactMessage.messageId],
+      ["work", compaction.id],
+    ]);
+    expect(entries[0]?.kind === "message" ? entries[0].message.idleCompaction : null).toBe(
+      "beforeCacheExpires",
+    );
+    const entry = entries[1];
     expect(entry?.kind === "work" ? entry.entry.label : null).toBe(
-      "Context compacted while idle 412K → 13K tokens",
+      "Context compacted 412K → 13K tokens",
     );
   });
 

@@ -1,30 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
-/**
- * The end of a Claude background task's output, for the composer's
- * background-work drawer (FORK-010).
- *
- * Claude Code writes a background Bash or Monitor's output to
- * `<tmp>/claude-<uid>/<project>/<session>/tasks/<task>.output` and names that
- * path only once the task ends, so the server finds the file from the thread's
- * own Claude sessions and the task id; no client path is accepted.
- *
- * Containment rules:
- * - task and session ids are plain names, so they cannot walk the tree;
- * - the file's realpath must be exactly `<root>/<project>/<session>/tasks/
- *   <task>.output` for one of this thread's own sessions: a link anywhere
- *   below the root (a symlinked `tasks` dir, another thread's session, a
- *   subagent's `.output` pointing at its transcript) is refused;
- * - the file is opened without following a final link, and the opened
- *   descriptor itself must be that file: the kernel's path for it
- *   (`/proc/self/fd/<fd>`, so Linux only) must be exactly the expected path,
- *   and it must be a regular file with one link. Path checks after the open
- *   could see a different directory state than the open did; the descriptor
- *   cannot. Where `/proc/self/fd` is missing the read is refused;
- * - only the tail is shown, cleaned of terminal control codes; secrets are
- *   masked over a wider window than is shown, so a cut cannot strip the
- *   context (a key's BEGIN line, a `token=`) that marks them, and the end of
- *   a line whose start the window lacks is not shown at all. Nothing is stored.
- */
+// Claude reveals output paths only after completion; derive them from this thread's own session ids.
+// Require exact realpaths and a regular, single-link descriptor under the task root; fail without /proc/self/fd.
+// Mask a wider window before cutting the tail so truncation cannot hide credential markers.
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -76,9 +53,7 @@ export function claudeSessionIdsForThread(
 
 // CSI (colours, cursor moves), OSC (titles, links) and two-byte escapes.
 const ANSI_ESCAPE =
-  // eslint-disable-next-line no-control-regex -- terminal escape codes are what this strips
   /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|[@-Z\\-_])/gu;
-// eslint-disable-next-line no-control-regex -- stray control bytes are what this strips
 const OTHER_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu;
 
 /**
@@ -190,13 +165,8 @@ export function maskBackgroundTaskOutput(text: string): string {
 /** Shown instead of the end of a line whose start the read window does not hold. */
 export const BACKGROUND_TASK_OUTPUT_LINE_TOO_LONG = "[line too long to show]";
 
-/**
- * Where the shown tail starts: at most `tailChars` from the end, at a whole
- * line. A window read from mid-file never shows its first, partial line.
- * With no whole line left, the tail is the end of one line: it is shown only
- * when the window holds that line's start (and so the key that names a
- * credential in it), less the partial word at the cut; otherwise null.
- */
+// Prefer whole lines within tailChars. A partial line is safe only if the window includes its start
+// and credential label; trim a partial trailing word, or return null when that context is missing.
 function tailStart(text: string, tailChars: number, startsAtFileStart: boolean): number | null {
   // Offset 0 is a line start only when the window starts the file.
   const isLineStart = (offset: number) =>

@@ -1,12 +1,5 @@
-/**
- * FORK (T3MIG-FORK-014): what keeps an idle provider session from being
- * stopped, beyond the turns it is running (`ProviderSessionManager`'s
- * `busyTurns`) and the adapter's own background work
- * (`hasPendingBackgroundWork`). A thread is held while it has an active run, a
- * pending approval or question, or delegated work (`delegate_task`) that is
- * still running or whose child still waits for children of its own. Anything
- * that cannot be read holds the session too.
- */
+// Active runs, pending requests, and unsettled delegations hold idle sessions beyond provider work.
+// A delegated child waiting on descendants still holds; unreadable state fails closed.
 import type {
   OrchestrationV2Run,
   OrchestrationV2RuntimeRequest,

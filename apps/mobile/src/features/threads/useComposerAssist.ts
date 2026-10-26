@@ -96,6 +96,7 @@ export function useComposerAssist(input: {
   const latestDraftRef = useRef(input.draft);
   const answerCountRef = useRef(0);
   const onChangeDraftRef = useRef(input.onChangeDraft);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Async assist replies and cue timers need the latest committed draft and change handler.
   useEffect(() => {
     onChangeDraftRef.current = input.onChangeDraft;
     latestDraftRef.current = input.draft;
@@ -109,6 +110,7 @@ export function useComposerAssist(input: {
     return true;
   }, []);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- Draft changes schedule assist RPCs; cleanup cancels debounce timers and rejects stale replies.
   useEffect(() => {
     const previous = previousDraftRef.current;
     const draft = input.draft;

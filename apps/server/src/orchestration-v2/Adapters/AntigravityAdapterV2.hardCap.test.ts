@@ -141,6 +141,7 @@ const openAntigravitySession = (input: {
           })),
         ),
       withProcess: (_stop, task) => task,
+      // @effect-diagnostics-next-line effectSucceedWithVoid:off -- An absent optional model requires undefined, not void.
       defaultModel: Effect.succeed(undefined),
     });
     const modelSelection = {
