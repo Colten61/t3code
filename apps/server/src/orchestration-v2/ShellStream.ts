@@ -123,6 +123,7 @@ const NEWEST_SETTLED_KEPT = 25;
  */
 export function omitOlderSettledShells(input: {
   readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
+  readonly allThreads?: ReadonlyArray<OrchestrationV2ThreadShell>;
   readonly snapshotSequence: number;
   readonly now: DateTime.Utc;
 }): {
@@ -141,22 +142,44 @@ export function omitOlderSettledShells(input: {
     .sort((left, right) => right - left);
   // With fewer than 25, the oldest one is the cut, so nothing is older.
   const beforeMs = settledTimes[NEWEST_SETTLED_KEPT - 1] ?? settledTimes.at(-1) ?? nowMs;
+  const keepOwnRow = (thread: OrchestrationV2ThreadShell) =>
+    !isOlderSettledThreadShell(thread, beforeMs) ||
+    thread.pinnedAt != null ||
+    (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs) ||
+    isLiveSubagentShell(thread);
+  const allThreads = input.allThreads ?? input.threads;
+  const byId = new Map(allThreads.map((thread) => [thread.id, thread]));
+  const present = new Set(input.threads.map((thread) => thread.id));
   const ancestorIds = new Set<string>();
+  const walked = new Set<ThreadId>();
   for (const thread of input.threads) {
-    if (thread.lineage.relationshipToParent !== "subagent") continue;
-    if (thread.lineage.parentThreadId !== null) ancestorIds.add(thread.lineage.parentThreadId);
-    ancestorIds.add(thread.lineage.rootThreadId);
+    if (thread.lineage.relationshipToParent === "subagent") {
+      if (thread.lineage.parentThreadId !== null) ancestorIds.add(thread.lineage.parentThreadId);
+      ancestorIds.add(thread.lineage.rootThreadId);
+    }
+    if (!keepOwnRow(thread)) continue;
+    let current: OrchestrationV2ThreadShell | undefined = thread;
+    while (current !== undefined && !walked.has(current.id)) {
+      walked.add(current.id);
+      const parentId: ThreadId | null | undefined =
+        current.lineage.relationshipToParent === "subagent"
+          ? current.lineage.parentThreadId
+          : current.lineage.relationshipToParent === null
+            ? current.launchedByThreadId
+            : null;
+      if (parentId == null) break;
+      const parent = byId.get(parentId);
+      if (parent === undefined || parent.projectId !== current.projectId) break;
+      ancestorIds.add(parentId);
+      current = parent;
+    }
   }
   const counts = new Map<ProjectId, number>();
-  const threads = input.threads.filter((thread) => {
+  const threads = allThreads.filter((thread) => {
+    if (!present.has(thread.id)) return ancestorIds.has(thread.id);
     if (!isOlderSettledThreadShell(thread, beforeMs)) return true;
     counts.set(thread.projectId, (counts.get(thread.projectId) ?? 0) + 1);
-    return (
-      thread.pinnedAt != null ||
-      (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs) ||
-      isLiveSubagentShell(thread) ||
-      ancestorIds.has(thread.id)
-    );
+    return keepOwnRow(thread) || ancestorIds.has(thread.id);
   });
   return {
     threads,
@@ -192,6 +215,7 @@ export function shellSnapshotForSubscriber(
   }
   const older = omitOlderSettledShells({
     threads: rows.threads,
+    allThreads: base.threads,
     snapshotSequence: base.snapshotSequence,
     now: options.now,
   });

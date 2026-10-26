@@ -156,6 +156,44 @@ describe("nestSidebarLaunchedThreads", () => {
     expect(nest(input).sections).toBe(input);
   });
 
+  it("keeps working writers under their settled coordinator on the Working shelf", () => {
+    const coordinator = thread("coordinator", { settledOverride: "settled" });
+    const writer = launched("writer", "coordinator", {
+      runtime: { ...runtime, status: "running" },
+    });
+    const result = nest(sections({ working: [writer], settled: [coordinator] }));
+
+    expect(result.forest.parentKeyByChildKey.get(key("writer"))).toBe(key("coordinator"));
+    expect(ids(result.sections.working)).toEqual(["coordinator"]);
+    expect(result.sections.settled).toEqual([]);
+    expect(result.nestedSectionByKey.get(key("writer"))).toBe("working");
+  });
+
+  it("returns a settled coordinator to the inbox for a writer that needs the user", () => {
+    const coordinator = thread("coordinator", { settledOverride: "settled" });
+    const writer = launched("writer", "coordinator", { hasPendingUserInput: true });
+    const result = nest(sections({ active: [writer], settled: [coordinator] }));
+
+    expect(ids(result.sections.active)).toEqual(["coordinator"]);
+    expect(result.sections.settled).toEqual([]);
+    expect(result.forest.parentKeyByChildKey.get(key("writer"))).toBe(key("coordinator"));
+  });
+
+  it("returns the group to Settled when its last writer settles", () => {
+    const coordinator = thread("coordinator", { settledOverride: "settled" });
+    const writer = launched("writer", "coordinator");
+    const working = nest(sections({ working: [writer], settled: [coordinator] }));
+    expect(ids(working.sections.working)).toEqual(["coordinator"]);
+
+    const finished = nest(
+      sections({ settled: [coordinator, { ...writer, settledOverride: "settled" }] }),
+    );
+    expect(finished.sections.working).toEqual([]);
+    expect(finished.sections.active).toEqual([]);
+    expect(ids(finished.sections.settled)).toEqual(["coordinator"]);
+    expect(finished.forest.parentKeyByChildKey.get(key("writer"))).toBe(key("coordinator"));
+  });
+
   it("keeps a child launched into another project where it is", () => {
     const orchestrator = thread("orchestrator");
     const elsewhere = launched("elsewhere", "orchestrator", {
@@ -197,9 +235,12 @@ describe("nestSidebarLaunchedThreads", () => {
     expect(result.forest.parentKeyByChildKey.get(key("live"))).toBe(key("pinned-orchestrator"));
     expect(result.nestedSectionByKey.get(key("live"))).toBe("active");
     expect(ids(result.sections.pinned)).toEqual(["pinned-orchestrator", "pinned-child"]);
-    expect(ids(result.sections.active)).toEqual(["inbox-orchestrator", "live-under-settled"]);
+    expect(ids(result.sections.active)).toEqual(["inbox-orchestrator", "settled-orchestrator"]);
+    expect(result.forest.parentKeyByChildKey.get(key("live-under-settled"))).toBe(
+      key("settled-orchestrator"),
+    );
     expect(ids(result.sections.snoozed)).toEqual(["snoozed-child"]);
-    expect(ids(result.sections.settled)).toEqual(["settled-child", "settled-orchestrator"]);
+    expect(ids(result.sections.settled)).toEqual(["settled-child"]);
   });
 
   it("puts a shelved thread's finished children on the shelf with it, never its live ones", () => {

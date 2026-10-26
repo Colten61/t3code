@@ -45,7 +45,7 @@ export function sidebarLaunchPlacement(section: SidebarSection): SidebarLaunchPl
   return section === "active" || section === "working" ? "inbox" : section;
 }
 
-// Launched children keep their own placement or nest in the inbox under a pinned parent.
+// Inbox children keep their coordinator when it is pinned or has already settled.
 // Settled children follow a shelved parent because shelving settles its working family.
 export function canNestSidebarLaunch(
   child: SidebarLaunchPlacement,
@@ -53,7 +53,7 @@ export function canNestSidebarLaunch(
 ): boolean {
   return (
     child === parent ||
-    (child === "inbox" && parent === "pinned") ||
+    (child === "inbox" && (parent === "pinned" || parent === "settled")) ||
     (child === "settled" && parent === "shelved")
   );
 }
@@ -301,6 +301,15 @@ export function nestSidebarLaunchedThreads<
     );
   const active = roots("active");
   const working: T[] = [];
+  const settled: T[] = [];
+  for (const thread of roots("settled")) {
+    const descendantSections = sidebarLaunchDescendantKeys(forest, sidebarLaunchThreadKey(thread))
+      .filter((key) => !forest.subagentKeys.has(key))
+      .map((key) => nestedSectionByKey.get(key));
+    if (descendantSections.includes("active")) active.push(thread);
+    else if (descendantSections.includes("working")) working.push(thread);
+    else settled.push(thread);
+  }
   for (const thread of roots("working")) {
     const holds = sidebarLaunchDescendantKeys(forest, sidebarLaunchThreadKey(thread)).some(
       (key) => {
@@ -317,7 +326,7 @@ export function nestSidebarLaunchedThreads<
       working,
       snoozed: roots("snoozed"),
       shelved: roots("shelved"),
-      settled: roots("settled"),
+      settled,
     },
     forest,
     nestedSectionByKey,

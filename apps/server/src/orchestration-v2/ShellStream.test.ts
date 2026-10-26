@@ -25,6 +25,7 @@ import {
   omitOlderSettledShells,
   shellStreamItemFromEnrichmentRefresh,
   shellStreamItemsFromInitialSnapshot,
+  shellSnapshotForSubscriber,
   shouldPublishShellApplicationEvent,
   skipUnchangedThreadShells,
 } from "./ShellStream.ts";
@@ -253,6 +254,97 @@ describe("omitOlderSettledShells", () => {
   it("keeps threads tied with the 25th newest", () => {
     const result = omit([...newest, row("tie", 2.4), row("older", 2.5)]);
     expect(result.threads.map((thread) => thread.id).slice(25)).toEqual(["tie"]);
+  });
+
+  it("keeps a working writer's settled coordinator chain in the initial snapshot", () => {
+    const coordinator = row("coordinator", 30);
+    const middle = row("middle", 30, { launchedByThreadId: coordinator.id });
+    const writer = row("writer", null, {
+      launchedByThreadId: middle.id,
+      activityRunStatus: "running",
+    });
+    const result = omit([...newest, coordinator, middle, writer, row("unrelated", 30)]);
+
+    expect(result.threads.map((thread) => thread.id).slice(25)).toEqual([
+      "coordinator",
+      "middle",
+      "writer",
+    ]);
+    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 3 }]);
+  });
+
+  it("still omits settled launch families when none of their rows need loading", () => {
+    const coordinator = row("coordinator", 30);
+    const writer = row("writer", 30, { launchedByThreadId: coordinator.id });
+    const result = omit([...newest, coordinator, writer]);
+
+    expect(result.threads).toEqual(newest);
+    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 2 }]);
+  });
+
+  it("keeps the coordinator above a subagent's launched parent", () => {
+    const coordinator = row("coordinator", 30);
+    const writer = row("writer", 30, { launchedByThreadId: coordinator.id });
+    const child = row("child", null, {
+      lineage: {
+        parentThreadId: writer.id,
+        rootThreadId: writer.id,
+        relationshipToParent: "subagent",
+      },
+      activityRunStatus: "running",
+    });
+    const result = omit([...newest, coordinator, writer, child]);
+
+    expect(result.threads.map((thread) => thread.id).slice(25)).toEqual([
+      "coordinator",
+      "writer",
+      "child",
+    ]);
+  });
+
+  it("keeps an idle subagent launcher between a working writer and its coordinator", () => {
+    const coordinator = row("coordinator", 30);
+    const middle = row("middle", 30, {
+      lineage: {
+        parentThreadId: coordinator.id,
+        rootThreadId: coordinator.id,
+        relationshipToParent: "subagent",
+      },
+    });
+    const writer = row("writer", null, {
+      launchedByThreadId: middle.id,
+      activityRunStatus: "running",
+    });
+    const result = shellSnapshotForSubscriber(
+      { ...emptyShellSnapshot, threads: [...newest, coordinator, middle, writer] },
+      { omitIdleSubagents: true, omitOlderSettled: true, now },
+    );
+
+    expect(result.snapshot.threads.map((thread) => thread.id).slice(25)).toEqual([
+      "coordinator",
+      "middle",
+      "writer",
+    ]);
+    expect(result.subagentThreadIds.has(middle.id)).toBe(true);
+  });
+
+  it("omits the idle launcher chain once its old settled writer is omitted", () => {
+    const coordinator = row("coordinator", 30);
+    const middle = row("middle", 30, {
+      lineage: {
+        parentThreadId: coordinator.id,
+        rootThreadId: coordinator.id,
+        relationshipToParent: "subagent",
+      },
+    });
+    const writer = row("writer", 30, { launchedByThreadId: middle.id });
+    const result = shellSnapshotForSubscriber(
+      { ...emptyShellSnapshot, threads: [...newest, coordinator, middle, writer] },
+      { omitIdleSubagents: true, omitOlderSettled: true, now },
+    );
+
+    expect(result.snapshot.threads).toEqual(newest);
+    expect(result.snapshot.olderSettled?.counts).toEqual([{ projectId: "project-a", count: 2 }]);
   });
 
   it("omits nothing with fewer than 25 settled threads, however old", () => {
