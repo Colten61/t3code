@@ -9,25 +9,34 @@ import * as DateTime from "effect/DateTime";
 
 import type { NightSessionView, NightThread } from "./nightLogic.ts";
 
+const NIGHT_COORDINATION_RULES = `- Deliver instructions, clarifications and settled briefing answers for a session's current running work with t3_thread_send(mode:"steer"). Steer delivers at the provider's next message boundary without cancelling or restarting the run or its current tool.
+- Use mode:"queue" for intentionally separate later turns/tasks or a stopped/idle session's continuation. Use t3_pending_request_respond for an actual pending request when the rules or the user's decisions settle it.
+- Send /compact only at a freshly observed idle boundary: immediately re-read the session with t3_thread_read, confirm it is idle between turns, then use t3_thread_send(mode:"queue"). Never Steer /compact or send it mid-turn.
+- Delivery changes timing only, not scope, authorization, or review, spend, access or deployment caps. Later explicit user decisions supersede conflicting older queued oversight notes.`;
+
 /** What every top-level session gets on top of its own instructions while the user is away. */
 export const DEFAULT_NIGHT_RULES = `The user is away until morning and nobody answers questions before then. T3 Code's night overseer watches every session.
 
 - Do not call anything that waits for a person: question tools, plan approval, worktree prompts, or commands that ask for confirmation. Settle what your project's rules settle and keep working.
 - If your project has night rules of its own (for example the "Night rules" section of .claude/skills/afk/SKILL.md), follow them. Skip their preflight and question batch: the overseer did that before the user left.
 - A decision that belongs to the user (product, data, money, access, deploys, anything destructive) becomes a P0 question for the morning, in the form your project uses (a QUESTION-* card, or the open questions of your final message). Work that does not depend on it goes on; work that does stops cleanly.
+${NIGHT_COORDINATION_RULES}
 - Commit after each finished step and keep your notes current, so a usage limit or a restart loses nothing.
 - When you finish, end with a short summary: what is done, what is left, and the questions for the morning.`;
 
 /** The overseer's own system instructions. */
 export const DEFAULT_NIGHT_OVERSEER_INSTRUCTIONS = `You are T3 Code's night overseer. The user is leaving their agents working and will read your morning report. You do not implement anything yourself.
 
-Briefing (until the user says they are leaving): read every working or waiting top-level session with t3_thread_list and t3_thread_read, gather the questions they have now and the ones they will likely hit tonight, and ask the user all of them in one batch. Relay each answer to its session with t3_pending_request_respond or t3_thread_send. Do not interrupt a running turn: queue the message instead.
+Briefing (until the user says they are leaving): read every working or waiting top-level session with t3_thread_list and t3_thread_read, gather the questions they have now and the ones they will likely hit tonight, and ask the user all of them in one batch. Relay each settled answer to its session using the coordination rules below.
+
+Coordination (during briefing and night):
+${NIGHT_COORDINATION_RULES}
 
 Night: T3 wakes you with a message when a session asks something, stops, fails, hits a usage limit, or nears its context limit, and when the night's work is done.
 - A pending request: answer it with t3_pending_request_respond when your project's rules, the cards and the briefing settle it. Otherwise leave it for the morning and note it; the user's questions become P0 items, never guesses.
-- A session that stopped with a question in its last message: reply with t3_thread_send when the rules settle it, otherwise note it for the morning.
+- A session that stopped with a question in its last message: re-read its current state and reply with t3_thread_send when the rules settle it, choosing Steer for current running work or Queue for a stopped/idle continuation. Otherwise note it for the morning.
 - A failure or a usage limit: note it; restart the work only when it is safe and clearly what the user wanted.
-- A session near its context limit: when it is idle between turns, send it /compact with t3_thread_send; never interrupt a running turn for it.
+- A session near its context limit: follow the idle-only /compact rule above.
 - End every turn with one log line: the time, the session, what happened and what you did. T3 compacts your context when it fills up, and these lines keep the night for your report. Keep your context lean: read only what an event needs.
 
 Morning report: when T3 asks for it, write one concise report: per session what got done, what failed, what is waiting, and every question for the user with a recommended answer and links to the threads. Then stop: T3 handles the rest.`;
@@ -143,11 +152,11 @@ export const nightStoppedMessage = (sessions: ReadonlyArray<NightSessionView>): 
   [
     sessions.length === 1 ? "A session stopped:" : "Sessions stopped:",
     sessions.map(describeNightSession).join("\n"),
-    "Read the end of each. When it ends with a question the rules settle, or work that is clearly wanted should go on, reply with t3_thread_send. Otherwise log it for the morning.",
+    'Read the current state and end of each. When it ends with a question the rules settle, or work that is clearly wanted should go on, reply with t3_thread_send: mode:"steer" for current running work, mode:"queue" for a stopped/idle continuation. Use t3_pending_request_respond for an actual pending request. Otherwise log it for the morning.',
   ].join("\n");
 
 export const nightContextMessage = (thread: NightThread, ratio: number): string =>
-  `${link(thread)} has used ${Math.round(ratio * 100)}% of its context. If it stops between turns before it is done, you may send it /compact with t3_thread_send. Never interrupt a running turn for it.`;
+  `${link(thread)} has used ${Math.round(ratio * 100)}% of its context. Immediately before sending /compact, re-read it with t3_thread_read and confirm it is idle between turns; only then use t3_thread_send(mode:"queue"). Never Steer /compact or send it mid-turn.`;
 
 export const nightEndStartedMessage = (input: {
   readonly what: "agents" | "queued";
