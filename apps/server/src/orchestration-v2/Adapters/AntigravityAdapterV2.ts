@@ -18,6 +18,7 @@ import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import type { AntigravityAuth } from "../../provider/AntigravityAuth.ts";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import {
+  ANTIGRAVITY_ACP_CLIENT_INFO,
   antigravityPermissionMode,
   applyAntigravityAcpModelSelection,
   buildAntigravityPrompt,
@@ -154,6 +155,7 @@ export function makeAntigravityAcpAdapterFlavor(
   return {
     driver: ANTIGRAVITY_PROVIDER,
     runtimeHarness: "Antigravity",
+    clientInfo: ANTIGRAVITY_ACP_CLIENT_INFO,
     capabilities: AntigravityProviderCapabilitiesV2,
     makeRuntime,
     buildPrompt: ({ text, attachments, promptCapabilities }) =>

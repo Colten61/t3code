@@ -14,6 +14,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import {
+  ANTIGRAVITY_ACP_CLIENT_INFO,
   applyAntigravityAcpModelSelection,
   buildAntigravityPrompt,
 } from "./AntigravityAcpSupport.ts";
@@ -546,4 +547,10 @@ it.layer(NodeServices.layer)("buildAntigravityPrompt", (it) => {
       });
     }),
   );
+});
+
+describe("ANTIGRAVITY_ACP_CLIENT_INFO", () => {
+  it("identifies with a JetBrains vendor prefix so third-party models are enabled by ACP", () => {
+    expect(ANTIGRAVITY_ACP_CLIENT_INFO.name.toLowerCase().startsWith("jetbrains.")).toBe(true);
+  });
 });

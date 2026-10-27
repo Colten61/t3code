@@ -25,17 +25,29 @@ import {
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import { normalizeAntigravitySessionUpdate } from "./AntigravityProtocol.ts";
 
+/**
+ * Official Antigravity ACP gates non-Gemini models behind a client identity check
+ * (JetBrains prefix, Zed, or Xcode). Identify with a JetBrains prefix so the server
+ * exposes all models available for the account.
+ */
+export const ANTIGRAVITY_ACP_CLIENT_INFO = {
+  name: "jetbrains.t3-code",
+  version: "0.0.0",
+} as const;
+
 export interface AntigravityAcpRuntimeInput extends Omit<
   AcpSessionRuntime.AcpSessionRuntimeOptions,
   | "authMethodId"
   | "authenticateEagerly"
   | "cancelBehavior"
   | "clientCapabilities"
+  | "clientInfo"
   | "onStderr"
   | "resumeMethod"
   | "transformSessionUpdate"
   | "transformStdout"
 > {
+  readonly clientInfo?: AcpSessionRuntime.AcpSessionRuntimeOptions["clientInfo"];
   readonly agentDeviceEnvironment?: Readonly<Record<string, string>>;
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly onAuthorizationUrl?: (url: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
@@ -53,6 +65,7 @@ export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(
   const context = yield* Layer.build(
     AcpSessionRuntime.layer({
       ...input,
+      clientInfo: input.clientInfo ?? ANTIGRAVITY_ACP_CLIENT_INFO,
       authMethodId: input.authMethod ?? "oauth-personal",
       authenticateEagerly: true,
       resumeMethod: "resume",

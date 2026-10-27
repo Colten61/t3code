@@ -28,7 +28,10 @@ import * as EffectAcpErrors from "effect-acp/errors";
 
 import * as ServerConfig from "../config.ts";
 import { openZipArchive } from "../zipArchive.ts";
-import { makeAntigravityAcpRuntime } from "./acp/AntigravityAcpSupport.ts";
+import {
+  ANTIGRAVITY_ACP_CLIENT_INFO,
+  makeAntigravityAcpRuntime,
+} from "./acp/AntigravityAcpSupport.ts";
 import {
   buildAntigravityAcpSpawnInput,
   prepareAntigravityProfile,
@@ -398,7 +401,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
                   }),
                 )
               : spawner,
-          clientInfo: { name: "t3-code", version: "0.0.0" },
+          clientInfo: ANTIGRAVITY_ACP_CLIENT_INFO,
         });
         const initialized = yield* runtime.initialize();
         if (
