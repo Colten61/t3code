@@ -41,13 +41,13 @@ export function resolveSidebarLauncherKey(
     place here: a group moves between them as a whole. */
 export type SidebarLaunchPlacement = "pinned" | "inbox" | "snoozed" | "shelved" | "settled";
 
-export function sidebarLaunchPlacement(section: SidebarSection): SidebarLaunchPlacement {
+function sidebarLaunchPlacement(section: SidebarSection): SidebarLaunchPlacement {
   return section === "active" || section === "working" ? "inbox" : section;
 }
 
 // Inbox children keep their coordinator when it is pinned or has already settled.
 // Settled children follow a shelved parent because shelving settles its working family.
-export function canNestSidebarLaunch(
+function canNestSidebarLaunch(
   child: SidebarLaunchPlacement,
   parent: SidebarLaunchPlacement,
 ): boolean {
@@ -686,7 +686,7 @@ export function resolveSidebarFamilyStatus(
 }
 
 /** FORK: who a thread waits on while its own turn is over, for the pill's hover card. */
-export function sidebarWorkingFamilyTooltip(titles: readonly string[]): string {
+function sidebarWorkingFamilyTooltip(titles: readonly string[]): string {
   const named = titles
     .slice(0, 3)
     .map((title) => `«${title}»`)
@@ -706,7 +706,7 @@ const GROUP_STATE_PRIORITY: Record<SidebarLaunchGroupState, number> = {
   done: 0,
 };
 
-export const SIDEBAR_LAUNCH_GROUP_STATE_LABEL: Record<SidebarLaunchGroupState, string> = {
+const SIDEBAR_LAUNCH_GROUP_STATE_LABEL: Record<SidebarLaunchGroupState, string> = {
   ...SIDEBAR_MOVE_LABEL,
   failed: "Failed",
 };
@@ -723,7 +723,7 @@ export interface SidebarLaunchGroupMember {
 
 // Finished children keep waiting on their launcher after being read; only unread plans lift.
 // Subagents lift only while working or asking, since their parent owns their results.
-export function resolveSidebarLaunchMemberState(member: SidebarLaunchGroupMember): {
+function resolveSidebarLaunchMemberState(member: SidebarLaunchGroupMember): {
   readonly state: SidebarLaunchGroupState | null;
   readonly move: SidebarMoveState | null;
 } {

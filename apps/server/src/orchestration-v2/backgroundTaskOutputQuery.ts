@@ -18,9 +18,9 @@ import * as Effect from "effect/Effect";
 const CLAUDE_DRIVER = "claudeAgent";
 
 /** Enough for a screen of a build log; the drawer shows the end of it. */
-export const BACKGROUND_TASK_OUTPUT_TAIL_BYTES = 64 * 1024;
+const BACKGROUND_TASK_OUTPUT_TAIL_BYTES = 64 * 1024;
 /** Read before the tail so masking sees what a cut would hide; longer than a private key. */
-export const BACKGROUND_TASK_OUTPUT_LEAD_IN_BYTES = 16 * 1024;
+const BACKGROUND_TASK_OUTPUT_LEAD_IN_BYTES = 16 * 1024;
 
 const PLAIN_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -112,7 +112,7 @@ interface SecretRange {
  * not in `text` (cut off above) is still a key: its base64 body runs back
  * from the END line to the first line that is not body, or to the start.
  */
-export function backgroundTaskOutputSecretRanges(text: string): ReadonlyArray<SecretRange> {
+function backgroundTaskOutputSecretRanges(text: string): ReadonlyArray<SecretRange> {
   const ranges: Array<SecretRange> = [];
   const pemReplacement = `${MASK} private key`;
   for (const match of text.matchAll(PEM_BLOCK)) {

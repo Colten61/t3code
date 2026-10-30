@@ -17,9 +17,9 @@ import { collectComposerContextReferences } from "@t3tools/shared/composerContex
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
 
 /** Drafts shorter than this get no cues: there is nothing worth saying yet. */
-export const COMPOSER_ASSIST_MIN_CUE_CHARS = 12;
+const COMPOSER_ASSIST_MIN_CUE_CHARS = 12;
 /** Longer drafts get no cues (mostly pasted logs or code); the server refuses them too. */
-export const COMPOSER_ASSIST_MAX_CUE_CHARS = 12_000;
+const COMPOSER_ASSIST_MAX_CUE_CHARS = 12_000;
 
 /** What the server answered to the operation that was asked; anything else is not an answer. */
 export function composerAssistAnswer<K extends ComposerAssistRunResult["operation"]>(
@@ -123,7 +123,7 @@ export interface ComposerTextRange {
 }
 
 /** The chips a draft string shows: mentions, skills, file links, citations and context references. */
-export function composerDraftChipRanges(draft: string): ReadonlyArray<ComposerTextRange> {
+function composerDraftChipRanges(draft: string): ReadonlyArray<ComposerTextRange> {
   const ranges: ComposerTextRange[] = [];
   // Links first: an unfinished @ mention can otherwise claim the start of a link label.
   for (const link of [

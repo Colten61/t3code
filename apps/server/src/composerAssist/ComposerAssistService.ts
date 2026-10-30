@@ -93,7 +93,7 @@ export class ComposerAssistService extends Context.Service<
   }
 >()("t3/composerAssist/ComposerAssistService") {}
 
-export function cueKindsFor(settings: {
+function cueKindsFor(settings: {
   readonly contradictions: boolean;
   readonly spelling: boolean;
   readonly sentences: boolean;
@@ -139,7 +139,7 @@ export function pickComposerAssistInstance<
 }
 
 /** The `claude --model` alias for the setting; an empty setting is Haiku. */
-export function modelOf(settings: { readonly model: string }): string {
+function modelOf(settings: { readonly model: string }): string {
   return settings.model === "" ? "haiku" : settings.model;
 }
 

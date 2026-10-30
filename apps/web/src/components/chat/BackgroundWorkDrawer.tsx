@@ -71,7 +71,7 @@ export function useBackgroundWorkHistory(input: {
   const history = useSyncExternalStore(subscribe, () =>
     key === null ? undefined : histories.get(key),
   );
-  // oxlint-disable-next-line t3code/react-effect-budget -- Commit settled server snapshots to the shared history that survives thread switches.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Commit settled server snapshots to the shared history that survives thread switches.
   useEffect(() => {
     if (key === null || !settled) return;
     setHistory(
@@ -134,7 +134,7 @@ function BackgroundTaskOutput({
     }),
   );
   const { refresh } = query;
-  // oxlint-disable-next-line t3code/react-effect-budget -- Refresh the server output file while its background task is live.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Refresh the server output file while its background task is live.
   useEffect(() => {
     if (!live) return;
     const id = setInterval(refresh, OUTPUT_REFRESH_MS);
@@ -145,7 +145,7 @@ function BackgroundTaskOutput({
   const followRef = useRef(true);
   const contents = query.data?.contents ?? "";
   // Follow the end like a terminal unless the reader scrolled up.
-  // oxlint-disable-next-line t3code/react-effect-budget -- Keep the output DOM scroller at the end unless the reader scrolled up.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keep the output DOM scroller at the end unless the reader scrolled up.
   useLayoutEffect(() => {
     const pre = preRef.current;
     if (pre && followRef.current && contents.length > 0) pre.scrollTop = pre.scrollHeight;
@@ -184,7 +184,7 @@ function BackgroundTaskOutput({
  * behind another notice is unseen, and so is a row scrolled out of it).
  */
 function useReadWhenShown(ref: RefObject<HTMLElement | null>, onRead: (() => void) | null): void {
-  // oxlint-disable-next-line t3code/react-effect-budget -- Observe row visibility and release its observer and read timer on unmount.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Observe row visibility and release its observer and read timer on unmount.
   useEffect(() => {
     const element = ref.current;
     if (onRead === null || element === null || typeof IntersectionObserver === "undefined") return;
@@ -240,7 +240,7 @@ function BackgroundWorkRow({
   const statusRef = useRef<HTMLSpanElement>(null);
   // Ticks through DOM writes, as the subagent bar does, so the chat view
   // never re-renders for a timer.
-  // oxlint-disable-next-line t3code/react-effect-budget -- Update elapsed status in the DOM without rerendering the chat each second.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Update elapsed status in the DOM without rerendering the chat each second.
   useLayoutEffect(() => {
     const update = () => {
       if (statusRef.current) {

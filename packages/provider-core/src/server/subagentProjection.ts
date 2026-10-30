@@ -87,6 +87,8 @@ export function makeSubagentChildThread(input: {
     instructions: null,
     shelvedAt: null,
     shelfNote: null,
+    pinnedAt: null,
+    pinOrderKey: null,
     // A guest link belongs to the thread it was made for.
     guestShare: null,
     lastVisitedAt: null,

@@ -224,6 +224,7 @@ export const DEFAULT_INSTANCE_DRIVERS: ReadonlyArray<ProviderDriverKind> = [
   "claudeAgent",
   "cursor",
   "grok",
+  "fx",
   "opencode",
   "antigravity",
   "pi",

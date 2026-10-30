@@ -60,20 +60,18 @@ it.effect("claims and settles effects in FULL-synchronous commits", () =>
       rollback("effect:durable-a-succeed"),
       rollback("effect:durable-b-fail"),
     ]);
-    const first = yield* recorded(outbox.claimNext({ workerId, leaseDurationMs: 30_000 }));
+    const first = yield* recorded(outbox.claimNext({ workerId }));
     assert.equal(Option.getOrUndefined(first)?.id, "effect:durable-a-succeed");
     assert.isTrue(
       yield* recorded(outbox.succeed({ effectId: "effect:durable-a-succeed", workerId })),
     );
-    const second = yield* recorded(outbox.claimNext({ workerId, leaseDurationMs: 30_000 }));
+    const second = yield* recorded(outbox.claimNext({ workerId }));
     assert.equal(Option.getOrUndefined(second)?.id, "effect:durable-b-fail");
     assert.isTrue(
       yield* recorded(outbox.fail({ effectId: "effect:durable-b-fail", workerId, error: "test" })),
     );
     // An empty claim still runs inside the pragmas and leaves NORMAL behind.
-    assert.isTrue(
-      Option.isNone(yield* recorded(outbox.claimNext({ workerId, leaseDurationMs: 1 }))),
-    );
+    assert.isTrue(Option.isNone(yield* recorded(outbox.claimNext({ workerId }))));
     const sync = yield* sql<{ readonly synchronous: number }>`PRAGMA synchronous`;
     assert.equal(sync[0]?.synchronous, 1);
   }).pipe(

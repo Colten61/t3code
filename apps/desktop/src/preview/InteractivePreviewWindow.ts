@@ -7,7 +7,7 @@ export type PreviewWindowAction =
   | { readonly kind: "back" | "forward" | "refresh" | "return" | "fullscreen" }
   | { readonly kind: "navigate"; readonly url: string };
 
-export function isPreviewWindowAction(value: unknown): value is PreviewWindowAction {
+function isPreviewWindowAction(value: unknown): value is PreviewWindowAction {
   if (typeof value !== "object" || value === null || !("kind" in value)) return false;
   if (value.kind === "navigate") {
     return "url" in value && typeof value.url === "string" && value.url.length <= 8192;

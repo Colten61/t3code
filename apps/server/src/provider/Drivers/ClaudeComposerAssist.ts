@@ -35,7 +35,7 @@ const MAX_STDERR_CHARS = 2_000;
  * `--safe-mode` leaves out CLAUDE.md, skills, plugins, hooks and MCP servers while the login keeps
  * working (`--bare` would refuse the subscription login). No tools, no saved session.
  */
-export function claudeComposerAssistArgs(
+function claudeComposerAssistArgs(
   system: string,
   model: string = COMPOSER_ASSIST_MODEL,
 ): ReadonlyArray<string> {
@@ -66,7 +66,7 @@ export function claudeComposerAssistArgs(
 }
 
 /** The user message Claude Code reads from stdin in stream-json mode. */
-export function claudeComposerAssistMessage(task: string): string {
+function claudeComposerAssistMessage(task: string): string {
   return `${JSON.stringify({
     type: "user",
     message: { role: "user", content: [{ type: "text", text: task }] },

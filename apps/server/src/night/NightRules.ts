@@ -28,6 +28,9 @@ export const layer = Layer.effect(
   NightRules,
   Effect.gen(function* () {
     const value = yield* Ref.make<NightRulesValue | null>(null);
-    return NightRules.of({ current: Ref.get(value), set: (next) => Ref.set(value, next) });
+    return NightRules.of({
+      current: Ref.get(value),
+      set: Effect.fn("NightRules.set")((next) => Ref.set(value, next)),
+    });
   }),
 );

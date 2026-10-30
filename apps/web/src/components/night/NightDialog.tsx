@@ -29,11 +29,7 @@ import { useComposerDraftStore } from "~/composerDraftStore";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { useThreadRouteTarget } from "~/hooks/useThreadRouteTarget";
 import { getCustomModelOptionsByInstance } from "~/modelSelection";
-import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
-  sortProviderInstanceEntries,
-} from "~/providerInstances";
+import { providerInstanceEntriesFor } from "~/providerInstances";
 import { useProjects, useQuietThreadShell, useServerConfigs } from "~/state/entities";
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { projectEnvironment, projectTodoBoard } from "~/state/projects";
@@ -99,9 +95,7 @@ function useModelChoices(project: EnvironmentProject) {
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(project.environmentId)) ??
     EMPTY_SERVER_PROVIDERS;
-  const instanceEntries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, project.id),
-  );
+  const instanceEntries = providerInstanceEntriesFor(providers, settings, project.id);
   return {
     settings,
     providers,

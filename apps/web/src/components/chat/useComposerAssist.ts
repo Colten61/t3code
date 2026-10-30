@@ -95,12 +95,12 @@ export function useComposerAssist(input: {
   const answerCountRef = useRef(0);
   // The latest values for the async work below, which outlives a render.
   const latest = useRef(input);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Give asynchronous assist responses the last committed editor and draft target.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Give asynchronous assist responses the last committed editor and draft target.
   useEffect(() => {
     latest.current = input;
   });
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Debounce server assist requests and discard replies after their draft or settings change.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Debounce server assist requests and discard replies after their draft or settings change.
   useEffect(() => {
     const previous = previousPromptRef.current;
     previousPromptRef.current = { draft, key: draftKey };

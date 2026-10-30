@@ -59,6 +59,8 @@ vi.mock("../state/entities", async (original) => ({
   readEnvironmentSupportsSettlement: () => true,
   readEnvironmentSupportsShelf: () => true,
   readEnvironmentSupportsSnooze: () => true,
+  readEnvironmentServerConfigLoaded: () => true,
+
   readThreadShell: () => threadShell,
 }));
 vi.mock("../state/use-atom-command", () => ({

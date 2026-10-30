@@ -19,7 +19,6 @@ import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -293,7 +292,7 @@ describe("AntigravityAdapterV2 under a provider instance's hard cap", () => {
     }).pipe(Effect.provide(layerSession), Effect.scoped),
   );
 
-  it.live("refuses the file writes T3 serves for the agent when file changes are declined", () =>
+  it.live("does not offer client file writes when file changes are declined", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -314,15 +313,8 @@ describe("AntigravityAdapterV2 under a provider instance's hard cap", () => {
           writeTextFile = handler;
         },
       });
-      if (writeTextFile === undefined) {
-        return yield* Effect.die("Antigravity sessions must serve client file requests");
-      }
+      assert.isUndefined(writeTextFile);
       const target = path.join(workspace, "src", "edited.ts");
-      const written = yield* writeTextFile(
-        { sessionId: "mock-session-1", path: target, content: "edited" },
-        { requestId: "test-fs/write_text_file", method: "fs/write_text_file" },
-      ).pipe(Effect.exit);
-      assert.isTrue(Exit.isFailure(written));
       assert.isFalse(yield* fileSystem.exists(target));
     }).pipe(Effect.provide(layerSession), Effect.scoped),
   );

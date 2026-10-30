@@ -9,7 +9,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 // NORMAL commits need a worker WAL sync each second to bound power-loss rollback without per-event fsyncs.
 // The worker stays responsive during main-thread SQLite busy waits; unchanged WALs need no I/O.
 // Open only the WAL: closing database or shm descriptors here would drop SQLite's POSIX locks.
-export const WAL_SYNC_INTERVAL = Duration.seconds(1);
+const WAL_SYNC_INTERVAL = Duration.seconds(1);
 
 const WORKER_SOURCE = `
 const { workerData, parentPort } = require("node:worker_threads");

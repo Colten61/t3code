@@ -3055,7 +3055,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           model: turnInput.modelSelection.model,
           instructions: turnInput.runtimePolicy.instructions,
         }),
-        t3OrchestrationSystemPrompt(mcpAvailable),
+        t3OrchestrationSystemPrompt(mcpAvailable, mcpSession?.capabilities?.has("device") === true),
       ]
         .filter((part) => part !== undefined && part.length > 0)
         .join("\n\n");
@@ -4038,8 +4038,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId,
     driver,
-    getCapabilities: () => Effect.succeed(OpenCode2ProviderCapabilities),
-    planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
+    getCapabilities: Effect.fn("OpencodeAdapter.getCapabilities")(function () {
+      return Effect.succeed(OpenCode2ProviderCapabilities);
+    }),
+    planSelectionTransition: Effect.fn("OpencodeAdapter.planSelectionTransition")(function () {
+      return Effect.succeed(turnScopedSelectionTransition());
+    }),
     // The session borrows the instance's server for as long as it is open, so a
     // spawned server is not idle-stopped under a long tool call.
     openSession: Effect.fn("OpenCode2Adapter.borrowAndOpenSession")(

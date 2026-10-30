@@ -18,11 +18,7 @@ import { useState } from "react";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { newMessageId, newThreadId } from "~/lib/utils";
 import { getCustomModelOptionsByInstance } from "~/modelSelection";
-import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
-  sortProviderInstanceEntries,
-} from "~/providerInstances";
+import { providerInstanceEntriesFor } from "~/providerInstances";
 import { useServerConfigs } from "~/state/entities";
 import { projectEnvironment } from "~/state/projects";
 import { useEnvironmentQuery } from "~/state/query";
@@ -87,9 +83,7 @@ export function TaskAgentsDialog(props: {
     reportFailure: false,
   });
 
-  const instanceEntries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, project.id),
-  );
+  const instanceEntries = providerInstanceEntriesFor(providers, settings, project.id);
   const [chosen, setChosen] = useState<ModelSelection | null>(null);
   const selection = chosen ?? scheduledTaskDefaultModel(settings, project, instanceEntries);
   const activeEntry = instanceEntries.find((entry) => entry.instanceId === selection?.instanceId);

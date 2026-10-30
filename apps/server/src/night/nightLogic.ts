@@ -43,7 +43,7 @@ export const CONTEXT_WARN_RATIO = 0.8;
 export const CONTEXT_REARM_RATIO = 0.5;
 
 /** Whether T3 will resume a thread that hit a usage limit, soon enough to wait for it. */
-export function awaitsLimitResume(
+function awaitsLimitResume(
   thread: NightThread,
   nowMs: number,
   autoResumeLimited: boolean,

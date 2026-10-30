@@ -48,7 +48,7 @@ type FamilyThreadInput = Pick<
 
 /** FORK: the thread this one works for: a subagent's parent, or the thread that
     launched it. A fork is the user's own thread and works for no one. */
-export function threadFamilyParentId(thread: FamilyThreadInput): ThreadId | null {
+function threadFamilyParentId(thread: FamilyThreadInput): ThreadId | null {
   if (thread.lineage.relationshipToParent === "subagent") return thread.lineage.parentThreadId;
   if (thread.lineage.relationshipToParent === null) return thread.launchedByThreadId ?? null;
   return null;

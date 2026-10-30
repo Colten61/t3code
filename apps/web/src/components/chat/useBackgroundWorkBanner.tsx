@@ -12,13 +12,14 @@ import {
   finishedBackgroundWorkTitle,
   type BackgroundWorkEntry,
 } from "./BackgroundWorkDrawer.logic";
-import type { ComposerBannerStackItem } from "./ComposerBannerStack";
-import { backgroundWorkBannerItem } from "./ThreadActivityBanners";
+import type { ThreadNowItem } from "./ThreadNow";
+import { backgroundWorkNowItem } from "./ThreadActivityBanners";
 
 export function useBackgroundWorkBanner(input: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId | null;
-  readonly tasks: Parameters<typeof backgroundWorkBannerItem>[0]["tasks"];
+  readonly tasks: Parameters<typeof backgroundWorkNowItem>[0]["tasks"];
+  readonly turnItems: Parameters<typeof backgroundWorkNowItem>[0]["turnItems"];
   readonly providerThreads: Parameters<typeof backgroundWorkOutputTaskIds>[0];
   readonly latestRunId: string | null;
   readonly settled: boolean;
@@ -60,17 +61,15 @@ export function useBackgroundWorkBanner(input: {
       onRead={history.markRead}
     />
   ) : undefined;
-  const base = backgroundWorkBannerItem({ ...input, threadId: input.threadId });
+  const base = backgroundWorkNowItem({ ...input, threadId: input.threadId });
   if (base === null)
     return {
       id: `background-work:${input.threadId}`,
-      variant: "default",
-      priority: "activity",
       icon: <span className="size-1.5 rounded-full bg-success" aria-hidden="true" />,
       title: finishedBackgroundWorkTitle(finished),
       actions: toggle,
       children: drawer,
-    } satisfies ComposerBannerStackItem;
+    } satisfies ThreadNowItem;
   return {
     ...base,
     details: (
@@ -83,5 +82,5 @@ export function useBackgroundWorkBanner(input: {
       </>
     ),
     children: drawer,
-  } satisfies ComposerBannerStackItem;
+  } satisfies ThreadNowItem;
 }

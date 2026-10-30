@@ -13,7 +13,7 @@ import * as ThreadManagement from "./ThreadManagementService.ts";
 
 // Use the normal Decline command with a request-derived id so replay cannot answer twice.
 // This worker answers requests; refusesFileChangeResponse enforces the cap against racing or stale Accepts.
-export const declineCommandFor = (
+const declineCommandFor = (
   event: Extract<OrchestrationV2DomainEvent, { readonly type: "runtime-request.updated" }>,
 ) =>
   ({

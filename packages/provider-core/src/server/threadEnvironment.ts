@@ -1,10 +1,10 @@
 // FORK: which T3 thread and project a provider process belongs to, for the hooks it runs.
 
 /** FORK: the T3 thread id (`thread:…`) the provider process works for. */
-export const T3_THREAD_ID_ENV = "T3CODE_THREAD_ID";
+const T3_THREAD_ID_ENV = "T3CODE_THREAD_ID";
 
 /** FORK: the project's root checkout, not the thread's worktree (same name as T3's terminals and project scripts use). */
-export const T3_PROJECT_ROOT_ENV = "T3CODE_PROJECT_ROOT";
+const T3_PROJECT_ROOT_ENV = "T3CODE_PROJECT_ROOT";
 
 export interface ThreadEnvironmentInput {
   readonly threadId: string;

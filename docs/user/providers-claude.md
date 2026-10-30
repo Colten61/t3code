@@ -57,8 +57,8 @@ history for that message. The cache lasts about an hour on a Claude
 subscription and 5 minutes with an API key, Bedrock, or Vertex. See [commands and skills](./composer.md#commands-and-skills) for using
 composer commands.
 
-**Compact idle threads** in **Settings > General** selects when Claude compacts
-large idle threads. Each Claude provider can override it:
+**Compact idle threads** in **Settings > Providers > Advanced** controls this for threads
+above the configured threshold. Each Claude provider's settings can override it:
 
 - **Before the cache expires (beta)** is the fork default. T3 compacts shortly
   before the one-hour subscription cache expires, so returning does not reread
@@ -98,8 +98,8 @@ tool, which refuses skills reserved for manual invocation.
 
 To show Claude task lists in the web and desktop apps, add
 `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` under **Variables** in the Claude instance's
-**Environment** section in **Settings > Providers**. Unfinished tasks stay visible
-between turns in the same Claude session.
+**Environment** section in **Settings > Providers**. Each update shows as a Tasks
+row in the thread; open it to see every step.
 
 ## OpenRouter
 

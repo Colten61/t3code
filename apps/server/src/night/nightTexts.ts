@@ -15,7 +15,7 @@ const NIGHT_COORDINATION_RULES = `- Deliver instructions, clarifications and set
 - Delivery changes timing only, not scope, authorization, or review, spend, access or deployment caps. Later explicit user decisions supersede conflicting older queued oversight notes.`;
 
 /** What every top-level session gets on top of its own instructions while the user is away. */
-export const DEFAULT_NIGHT_RULES = `The user is away until morning and nobody answers questions before then. T3 Code's night overseer watches every session.
+const DEFAULT_NIGHT_RULES = `The user is away until morning and nobody answers questions before then. T3 Code's night overseer watches every session.
 
 - Do not call anything that waits for a person: question tools, plan approval, worktree prompts, or commands that ask for confirmation. Settle what your project's rules settle and keep working.
 - If your project has night rules of its own (for example the "Night rules" section of .claude/skills/afk/SKILL.md), follow them. Skip their preflight and question batch: the overseer did that before the user left.
@@ -25,7 +25,7 @@ ${NIGHT_COORDINATION_RULES}
 - When you finish, end with a short summary: what is done, what is left, and the questions for the morning.`;
 
 /** The overseer's own system instructions. */
-export const DEFAULT_NIGHT_OVERSEER_INSTRUCTIONS = `You are T3 Code's night overseer. The user is leaving their agents working and will read your morning report. You do not implement anything yourself.
+const DEFAULT_NIGHT_OVERSEER_INSTRUCTIONS = `You are T3 Code's night overseer. The user is leaving their agents working and will read your morning report. You do not implement anything yourself.
 
 Briefing (until the user says they are leaving): read every working or waiting top-level session with t3_thread_list and t3_thread_read, gather the questions they have now and the ones they will likely hit tonight, and ask the user all of them in one batch. Relay each settled answer to its session using the coordination rules below.
 
@@ -81,7 +81,7 @@ const REQUEST_LABELS: Record<OrchestrationV2RuntimeRequest["kind"], string> = {
 };
 
 /** How a session stands, for the briefing and for stop reports. */
-export function describeNightSession(session: NightSessionView): string {
+function describeNightSession(session: NightSessionView): string {
   const { thread } = session;
   const parts: string[] = [];
   if (thread.pendingRuntimeRequest !== null) {

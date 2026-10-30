@@ -27,11 +27,11 @@ export function canStartTaskAgent(card: TodoBoardCard): boolean {
 }
 
 /** The card ID leads the title, so the thread is easy to match to its card. */
-export function taskAgentThreadTitle(card: TodoBoardCard): string {
+function taskAgentThreadTitle(card: TodoBoardCard): string {
   return `${card.id} · ${card.title}`;
 }
 
-export function orchestratorThreadTitle(cards: ReadonlyArray<TodoBoardCard>): string {
+function orchestratorThreadTitle(cards: ReadonlyArray<TodoBoardCard>): string {
   return `${cards.map((card) => card.id).join(" + ")} · orchestrator`;
 }
 
@@ -39,7 +39,7 @@ export function orchestratorThreadTitle(cards: ReadonlyArray<TodoBoardCard>): st
  * The orchestrator's first message: every card with its brief, file and start prompt, and how many
  * writers may work at once when that is fewer than the cards.
  */
-export function orchestratorMessage(
+function orchestratorMessage(
   projectTitle: string,
   cards: ReadonlyArray<TodoBoardCard>,
   maxRunning?: number,

@@ -10,6 +10,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import {
+  resolveT3McpSummaryAction,
   resolveT3McpToolDefinition,
   type T3McpToolDefinition,
   type T3McpToolSummaryAction,
@@ -164,6 +165,16 @@ function workEntryToolName(
   return resolveT3McpToolDefinition(entry.toolTitle) ? entry.toolTitle : entry.label;
 }
 
+function workEntryToolInput(
+  entry: Pick<WorkLogPresentationEntry, "toolData" | "structuredPayload">,
+): unknown {
+  const item = entry.structuredPayload;
+  const data = asRecord(entry.toolData);
+  return item?.type === "dynamic_tool"
+    ? item.input
+    : (data?.arguments ?? data?.input ?? data?.rawInput);
+}
+
 function workEntryToolOutput(
   entry: Pick<WorkLogPresentationEntry, "toolData" | "structuredPayload">,
 ): unknown {
@@ -240,7 +251,10 @@ export function resolveWorkEntryToolPresentation(
   >,
   fallbackStatus?: "inProgress" | "completed",
 ) {
-  const definition = resolveT3McpToolDefinition(workEntryToolName(entry));
+  const definition = resolveT3McpToolDefinition(
+    workEntryToolName(entry),
+    workEntryToolInput(entry),
+  );
   const status = entry.toolLifecycleStatus ?? fallbackStatus;
   return resolveT3McpToolPresentation(
     definition,
@@ -304,17 +318,6 @@ export function workEntryIndicatesToolFailure(entry: WorkLogPresentationEntry): 
 
 export function workEntryDisplayIndicatesToolFailure(entry: WorkLogPresentationEntry): boolean {
   return workEntryIndicatesToolFailureFromOutput(entry, false);
-}
-
-export function workEntryIndicatesToolSuccess(entry: WorkLogPresentationEntry): boolean {
-  return (
-    workLogEntryIsToolLike(entry) &&
-    !workEntryIndicatesToolFailure(entry) &&
-    entry.tone !== "thinking" &&
-    entry.toolLifecycleStatus !== "idle" &&
-    entry.toolLifecycleStatus !== "inProgress" &&
-    entry.toolLifecycleStatus !== "stopped"
-  );
 }
 
 function workLogEntryIsLocalCodeSearch(entry: WorkLogPresentationEntry): boolean {
@@ -475,16 +478,8 @@ function toolGroupActionLabel(action: ToolGroupAction, count: number): string {
 }
 
 function t3ToolSummaryCall(entry: WorkLogPresentationEntry): T3ToolSummaryCall {
-  const item = entry.structuredPayload;
-  const data =
-    entry.toolData !== null && typeof entry.toolData === "object"
-      ? (entry.toolData as Record<string, unknown>)
-      : undefined;
   return {
-    input:
-      item?.type === "dynamic_tool"
-        ? item.input
-        : (data?.arguments ?? data?.input ?? data?.rawInput),
+    input: workEntryToolInput(entry),
     output: workEntryToolOutput(entry),
     outcome:
       entry.toolLifecycleStatus === "failed" ||
@@ -562,7 +557,10 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
   >();
   const sources = new Map<string, ToolActivitySource>();
   for (const entry of entries) {
-    const t3Action = resolveT3McpToolDefinition(workEntryToolName(entry))?.summaryAction ?? null;
+    const t3Action = resolveT3McpSummaryAction(
+      workEntryToolName(entry),
+      t3ToolSummaryCall(entry).input,
+    );
     if (entry.toolSource && t3Action === null) {
       sources.set(entry.toolSource.key, entry.toolSource);
       continue;

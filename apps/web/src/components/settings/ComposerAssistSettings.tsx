@@ -9,7 +9,7 @@ import {
   composerAssistAnswer,
   composerAssistModelSelection,
 } from "@t3tools/client-runtime/composer-assist";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   ComposerAssistCue,
   ComposerAssistStatus,
@@ -17,7 +17,11 @@ import type {
   ProjectId,
   ServerProvider,
 } from "@t3tools/contracts";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useState } from "react";
+import * as Effect from "effect/Effect";
+import { Atom } from "effect/reactivity";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { useEnvironmentQuery } from "~/state/query";
 import * as Equal from "effect/Equal";
 
 import { useProjects } from "~/state/entities";
@@ -28,11 +32,7 @@ import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { getComposerProviderState } from "../chat/composerProviderState";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
-import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
-  sortProviderInstanceEntries,
-} from "../../providerInstances";
+import { providerInstanceEntriesFor } from "../../providerInstances";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
 import { toastManager } from "../ui/toast";
@@ -171,45 +171,38 @@ function summaryOf(status: ComposerAssistStatus, nowMs: number): ReadonlyArray<s
   return lines;
 }
 
-function ActivityRow({ environmentId }: { readonly environmentId: EnvironmentId }) {
-  const ask = useAtomCommand(serverEnvironment.composerAssist, { reportFailure: false });
-  // The ages in the summary count to when the status was read; it does not tick.
-  const [status, setStatus] = useState<{
-    readonly status: ComposerAssistStatus;
-    readonly readAtMs: number;
-  } | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
-  const refresh = (target: EnvironmentId) => {
-    void ask({ environmentId: target, input: { operation: "status" } }).then((result) => {
-      if (result._tag === "Failure") {
-        const cause = squashAtomCommandFailure(result);
-        setFailure(cause instanceof Error ? cause.message : "Could not read the status.");
-        return;
-      }
+const activityStatusAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make(
+    Effect.tryPromise(async () => {
+      const result = await runAtomCommand(
+        appAtomRegistry,
+        serverEnvironment.composerAssist,
+        { environmentId, input: { operation: "status" } },
+        { reportFailure: false },
+      );
+      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
       const answer = composerAssistAnswer(result.value, "status");
-      if (answer === null) return;
-      setFailure(null);
-      setStatus({ status: answer.status, readAtMs: Date.now() });
-    });
-  };
-  const refreshOnEnvironment = useEffectEvent(refresh);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Read server activity when the selected environment changes.
-  useEffect(() => {
-    refreshOnEnvironment(environmentId);
-  }, [environmentId]);
+      if (answer === null) throw new Error("Could not read the status.");
+      return answer.status;
+    }),
+  ).pipe(Atom.withLabel(`composer-assist-activity:${environmentId}`)),
+);
+
+function ActivityRow({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const query = useEnvironmentQuery(activityStatusAtom(environmentId));
   const lines =
-    failure !== null
-      ? [failure]
-      : status === null
+    query.error !== null
+      ? [query.error]
+      : query.data === null
         ? ["Reading…"]
-        : summaryOf(status.status, status.readAtMs);
+        : summaryOf(query.data, query.dataUpdatedAt);
   return (
     <SettingsRow
       {...searchableSetting("composer-assist-activity")}
       title="Activity"
       description="What composer assist has done since this server started."
       control={
-        <Button size="sm" variant="outline" onClick={() => refresh(environmentId)}>
+        <Button size="sm" variant="outline" onClick={query.refresh}>
           Refresh
         </Button>
       }
@@ -439,12 +432,10 @@ export function ComposerAssistSettingsSections({
   const availableProviders = providers.filter(
     (provider) => provider.supportsTextGeneration !== false,
   );
-  const entries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(
-      deriveProviderInstanceEntries(availableProviders),
-      settings,
-      target?.projectId ?? null,
-    ),
+  const entries = providerInstanceEntriesFor(
+    availableProviders,
+    settings,
+    target?.projectId ?? null,
   );
   const selection = composerAssistModelSelection(assist, availableProviders);
   const selectedEntry = entries.find((entry) => entry.instanceId === selection?.instanceId);

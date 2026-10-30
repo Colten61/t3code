@@ -23,7 +23,7 @@ export function PreviewWorkspacePage({
   const navigate = useNavigate();
   const returnToChat = useNavigateToMainApp();
   const [fullscreen, setFullscreen] = useState(() => document.fullscreenElement !== null);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Follow fullscreen changes from the browser or Escape as well as the toggle button.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Follow fullscreen changes from the browser or Escape as well as the toggle button.
   useEffect(() => {
     const update = () => setFullscreen(document.fullscreenElement !== null);
     document.addEventListener("fullscreenchange", update);

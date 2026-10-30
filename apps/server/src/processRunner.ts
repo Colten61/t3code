@@ -149,8 +149,6 @@ const DEFAULT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 // Without it, an uncooperative child can hold the caller and its permits indefinitely.
 export const PROCESS_FORCE_KILL_AFTER = "1 second";
 
-export { isWindowsCommandNotFound } from "@t3tools/provider-core/server/snapshotProbe";
-
 const collectText = Effect.fnUntraced(function* (input: {
   readonly command: string;
   readonly args: ReadonlyArray<string>;

@@ -43,7 +43,7 @@ function finish(choice: ShelfNoteChoice | null) {
 
 export function ShelfNoteDialogHost() {
   const request = useRequest((state) => state.request);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Cancel the pending external request when the dialog host unmounts.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Cancel the pending external request when the dialog host unmounts.
   useEffect(() => () => finish(null), []);
   return request ? <ShelfNoteDialog request={request} /> : null;
 }

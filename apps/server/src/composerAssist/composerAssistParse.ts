@@ -41,7 +41,7 @@ const MIN_ALTERNATIVES: Record<ComposerAssistCueKindName, number> = {
 };
 const MAX_NOTE_CHARS = 120;
 
-export function composerMarkers(text: string): ReadonlyArray<string> {
+function composerMarkers(text: string): ReadonlyArray<string> {
   return (text.match(MARKER) ?? []).toSorted();
 }
 
@@ -91,7 +91,7 @@ export function parseBlankReply(reply: string, draft: string): ComposerAssistBla
 }
 
 /** The first JSON object in a reply, tolerating fences or a stray sentence around it. */
-export function parseJsonObject(reply: string): Record<string, unknown> | null {
+function parseJsonObject(reply: string): Record<string, unknown> | null {
   const start = reply.indexOf("{");
   const end = reply.lastIndexOf("}");
   if (start === -1 || end <= start) return null;
